@@ -69,6 +69,46 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
     _currentVolume = await VolumeController().getVolume();
   }
 
+  void _showServers() {
+    final servers = _c.availableServers.entries.toList();
+    if (servers.isEmpty) {
+      Get.snackbar('Servidores', 'No se detectaron servidores alternativos.');
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (context) => ListView(
+        shrinkWrap: true,
+        children: [
+          for (final entry in servers)
+            ListTile(
+              leading: Icon(
+                entry.key == _c.currentServerName.value
+                    ? Icons.check_circle
+                    : Icons.dns_outlined,
+                color: entry.key == _c.currentServerName.value
+                    ? Colors.red
+                    : null,
+              ),
+              title: Text(entry.key),
+              subtitle: Text(
+                entry.key == _c.currentServerName.value
+                    ? 'En uso'
+                    : 'Toca para cambiar',
+              ),
+              onTap: () {
+                Navigator.of(context).pop();
+                _c.serverFailedMessage.value = '';
+                _c.switchServer(entry.key);
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     _init();
@@ -320,6 +360,52 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                           ],
                         )
                       ],
+                    );
+                  }
+                  if (_c.serverFailedMessage.value.isNotEmpty) {
+                    return Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.65),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.cloud_off_rounded,
+                            size: 38,
+                            color: Colors.white70,
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            _c.serverFailedMessage.value,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 13, height: 1.35),
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              FilledButton(
+                                onPressed: () {
+                                  _c.serverFailedMessage.value = '';
+                                  _c.play();
+                                },
+                                child: Text('common.retry'.i18n),
+                              ),
+                              if (_c.availableServers.isNotEmpty) ...[
+                                const SizedBox(width: 10),
+                                FilledButton(
+                                  onPressed: _showServers,
+                                  child: const Text('Servidor'),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
                     );
                   }
                   if (!_c.isGettingWatchData.value) {

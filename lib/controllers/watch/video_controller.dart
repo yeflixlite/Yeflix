@@ -1050,8 +1050,10 @@ class VideoPlayerController extends GetxController {
   }
 
   // Intenta abrir el player con la URL dada.
-  // Retorna true si el player fue abierto correctamente.
-  // Retorna false si la URL es error:// o el host no es alcanzable.
+  // Retorna true solo si el stream REALMENTE empieza a reproducirse.
+  // Antes se devolvía true en cuanto se llamaba a player.open(); si la URL
+  // conectaba por TCP pero respondía 403/timeout, nunca se hacía failover y
+  // el usuario veía un error de libmpv sin salida.
   Future<bool> _tryOpenPlayer(
       String url, Map<String, String>? headers) async {
     if (url.startsWith('error://')) {
@@ -1061,8 +1063,43 @@ class VideoPlayerController extends GetxController {
     if (!await _isHostReachable(url)) {
       return false;
     }
-    await player.open(Media(url, httpHeaders: headers));
-    return true;
+
+    try {
+      await player.open(Media(url, httpHeaders: headers));
+    } catch (e) {
+      logger.severe('player.open error: $e');
+      return false;
+    }
+
+    final completer = Completer<bool>();
+    final subs = <StreamSubscription>[];
+    void finish(bool ok) {
+      if (!completer.isCompleted) completer.complete(ok);
+    }
+
+    subs.add(player.stream.playing.listen((playing) {
+      if (playing) finish(true);
+    }));
+    subs.add(player.stream.duration.listen((d) {
+      if (d > const Duration(seconds: 1)) finish(true);
+    }));
+    subs.add(player.stream.error.listen((_) => finish(false)));
+
+    final ok = await completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => false,
+    );
+    for (final sub in subs) {
+      await sub.cancel();
+    }
+
+    if (!ok) {
+      logger.severe('El stream no arrancó: $url');
+      try {
+        await player.stop();
+      } catch (_) {}
+    }
+    return ok;
   }
 
   // Inicializa mpv con una fuente local de video negro (sin red).

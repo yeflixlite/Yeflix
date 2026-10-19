@@ -166,9 +166,13 @@ export default class extends Extension {
     }
 
     // Mapa para el selector de servidores y el failover automatico de la app.
+    // Se ordena por fiabilidad para que el failover pruebe mixdrop antes.
+    const ranked = servers
+      .slice()
+      .sort((a, b) => this.rankHost(a.url) - this.rankHost(b.url));
     const map = {};
     const refs = {};
-    for (const s of servers) {
+    for (const s of ranked) {
       map[s.name] = s.url;
       refs[s.name] = full;
     }
@@ -203,10 +207,11 @@ export default class extends Extension {
   }
 
   // Prioridad de servidores: los que sabemos resolver/reproducir primero.
+  // mixdrop va primero: mp4upload usa el puerto 183 y suele dar timeout/403.
   rankHost(u) {
     const h = (u.match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
-    if (h.indexOf("mp4upload") !== -1) return 0;
-    if (h.indexOf("mixdrop") !== -1 || h.indexOf("mxdrop") !== -1) return 1;
+    if (h.indexOf("mixdrop") !== -1 || h.indexOf("mxdrop") !== -1) return 0;
+    if (h.indexOf("mp4upload") !== -1) return 1;
     if (h.indexOf("dood") !== -1 || h.indexOf("playmogo") !== -1 || h.indexOf("ds2") !== -1) return 2;
     return 3;
   }
