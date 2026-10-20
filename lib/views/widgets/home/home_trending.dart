@@ -3,8 +3,13 @@ import 'package:get/get.dart';
 import 'package:jiruhub/controllers/main_controller.dart';
 import 'package:jiruhub/controllers/search_controller.dart';
 import 'package:jiruhub/data/providers/anilist_provider.dart';
+import 'package:jiruhub/data/services/extension_service.dart';
+import 'package:jiruhub/models/extension.dart';
+import 'package:jiruhub/utils/extension.dart';
 import 'package:jiruhub/utils/i18n.dart';
+import 'package:jiruhub/utils/jiruhub_storage.dart';
 import 'package:jiruhub/utils/yeflix_style.dart';
+import 'package:jiruhub/views/pages/detail_page.dart';
 import 'package:jiruhub/views/widgets/cache_network_image.dart';
 
 /// "Tendencias" carousel fed by the public AniList trending list.
@@ -39,14 +44,94 @@ class _HomeTrendingState extends State<HomeTrending> {
     }
   }
 
-  void _open(dynamic media) {
+  Future<void> _open(dynamic media) async {
     final title = (media["title"]?["userPreferred"] ??
             media["title"]?["romaji"] ??
             "")
         .toString();
     if (title.isEmpty) return;
+
+    final runtimes = ExtensionUtils.runtimes.values
+        .where((e) => e.extension.type == ExtensionType.bangumi)
+        .where((e) =>
+            !e.extension.nsfw ||
+            JiruHubStorage.getSetting(SettingKey.enableNSFW))
+        .toList();
+
+    if (runtimes.isEmpty) {
+      _search(title);
+      return;
+    }
+
+    Get.dialog(
+      const Center(child: CircularProgressIndicator(strokeWidth: 2.4)),
+      barrierDismissible: false,
+    );
+
+    ExtensionService? bestRuntime;
+    ExtensionListItem? bestItem;
+    var bestScore = 0;
+
+    final batches = await Future.wait(runtimes.map((rt) async {
+      try {
+        final list = await rt
+            .search(title, 1)
+            .timeout(const Duration(seconds: 15));
+        return MapEntry(rt, list);
+      } catch (_) {
+        return MapEntry(rt, <ExtensionListItem>[]);
+      }
+    }));
+
+    for (final batch in batches) {
+      for (final item in batch.value) {
+        final score = _matchScore(title, item.title);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRuntime = batch.key;
+          bestItem = item;
+        }
+      }
+    }
+
+    if (Get.isDialogOpen == true) Get.back();
+
+    if (bestRuntime != null && bestItem != null && bestScore > 0) {
+      final item = bestItem;
+      Get.to(() => DetailPage(
+            url: item.url,
+            package: bestRuntime!.extension.package,
+            tag: item.url,
+          ));
+      return;
+    }
+
+    _search(title);
+  }
+
+  void _search(String title) {
     Get.put(SearchPageController()).search.value = title;
     Get.find<MainController>().changeTab(1);
+  }
+
+  int _matchScore(String query, String candidate) {
+    String norm(String s) => s
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+
+    final q = norm(query);
+    final c = norm(candidate);
+    if (q.isEmpty || c.isEmpty) return 0;
+    if (q == c) return 100;
+    if (c.startsWith(q)) return 80;
+    if (c.contains(q)) return 60;
+    if (q.contains(c)) return 40;
+
+    final qs = q.split(' ').where((e) => e.length > 2).toSet();
+    final cs = c.split(' ').where((e) => e.length > 2).toSet();
+    final hit = qs.intersection(cs).length;
+    return hit > 0 ? 20 + hit : 0;
   }
 
   @override

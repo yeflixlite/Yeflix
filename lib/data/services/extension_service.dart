@@ -75,6 +75,7 @@ class ExtensionService {
       final url = args[0];
       final method = args[1]['method'] ?? 'get';
       final requestBody = args[1]['data'];
+      final followRedirects = args[1]['followRedirects'] ?? true;
 
       final log = ExtensionNetworkLog(
         extension: extension,
@@ -96,6 +97,10 @@ class ExtensionService {
           options: Options(
             headers: headers,
             method: method,
+            followRedirects: followRedirects,
+            validateStatus: followRedirects
+                ? null
+                : (status) => status != null && status < 400,
           ),
         );
         log.requestHeaders = res.requestOptions.headers;
