@@ -7,7 +7,7 @@ import 'package:jiruhub/controllers/main_controller.dart';
 import 'package:jiruhub/controllers/search_controller.dart';
 import 'package:jiruhub/views/widgets/home/home_favorites.dart';
 import 'package:jiruhub/views/widgets/home/home_recent.dart';
-import 'package:jiruhub/views/widgets/home/home_trending.dart';
+import 'package:jiruhub/views/widgets/home/home_catalog.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/yeflix_style.dart';
 import 'package:jiruhub/views/widgets/platform_widget.dart';
@@ -175,7 +175,7 @@ class _HomePageState extends State<HomePage> {
                 HomeRecent(data: c.resents),
                 const SizedBox(height: 18),
               ],
-              const HomeTrending(),
+              const HomeCatalog(),
               if (favBangumi.isNotEmpty) ...[
                 HomeFavorites(type: ExtensionType.bangumi, data: favBangumi),
                 const SizedBox(height: 8),
@@ -184,7 +184,12 @@ class _HomePageState extends State<HomePage> {
                 HomeFavorites(type: ExtensionType.manga, data: favManga),
                 const SizedBox(height: 8),
               ],
-              if (!hasRecent && !hasFav) _emptyState(),
+              if (!hasRecent &&
+                  !hasFav &&
+                  c.animes.isEmpty &&
+                  c.movies.isEmpty &&
+                  c.series.isEmpty)
+                _emptyState(),
             ],
           ),
         );

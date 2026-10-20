@@ -640,6 +640,43 @@ class _Footer extends StatelessWidget {
   const _Footer({required this.controller});
   final VideoPlayerController controller;
 
+  void _showServers(BuildContext context) {
+    final servers = controller.availableServers.entries.toList();
+    if (servers.isEmpty) return;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final entry in servers)
+              ListTile(
+                leading: Icon(
+                  entry.key == controller.currentServerName.value
+                      ? Icons.check_circle
+                      : Icons.dns_outlined,
+                  color: entry.key == controller.currentServerName.value
+                      ? Colors.red
+                      : null,
+                ),
+                title: Text(entry.key),
+                subtitle: Text(
+                  entry.key == controller.currentServerName.value
+                      ? 'En uso'
+                      : 'Toca para cambiar',
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  controller.serverFailedMessage.value = '';
+                  controller.switchServer(entry.key);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -796,6 +833,16 @@ class _Footer extends StatelessWidget {
                     controller.toggleSideBar(SidebarTab.torrentFiles);
                   },
                   icon: const Icon(Icons.video_file),
+                );
+              }),
+              Obx(() {
+                if (controller.availableServers.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return IconButton(
+                  tooltip: 'Servidores',
+                  onPressed: () => _showServers(context),
+                  icon: const Icon(Icons.dns_rounded),
                 );
               }),
               IconButton(

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:jiruhub/models/extension.dart';
 import 'package:jiruhub/controllers/extension/extension_controller.dart';
+import 'package:jiruhub/controllers/home_controller.dart';
 import 'package:jiruhub/controllers/search_controller.dart';
 import 'package:jiruhub/controllers/settings_controller.dart';
 import 'package:jiruhub/data/services/extension_service.dart';
@@ -188,6 +189,9 @@ class ExtensionUtils {
     // 重载搜索页面
     if (Get.isRegistered<SearchPageController>()) {
       Get.find<SearchPageController>().callRefresh();
+    }
+    if (Get.isRegistered<HomePageController>()) {
+      Get.find<HomePageController>().loadCatalog();
     }
   }
 
