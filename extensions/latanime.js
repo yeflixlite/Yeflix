@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Latanime
-// @version      v0.1.1
+// @version      v0.1.3
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -27,6 +27,22 @@
 const SITE = "https://latanime.org";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// Byse/Filemoon resuelven el video por API (respuesta cifrada AES-256-GCM).
+const BYSE_RE =
+  /(bysekoze|bysesukior|bysejikuar|byse\.(sx|com|to)|filemoon\.|filemooon|moonplayer|398fitus)/i;
+// VOE ofusca su configuracion en un <script type="application/json">.
+const VOE_RE =
+  /(voe\.sx|v-?o-?e\.|voe-video|johnfullwonder|charlestoughrace|derricknationtop|timmaybealready|richardquestionbuilding|nicolehappyoutside|rebeccapracticeloss|jenniferperformer|reitshof)/i;
+const VOE_MIRRORS = [
+  "derricknationtop.com",
+  "johnfullwonder.com",
+  "charlestoughrace.com",
+  "timmaybealready.com",
+  "richardquestionbuilding.com",
+  "nicolehappyoutside.com",
+  "rebeccapracticeloss.com",
+];
 
 export default class extends Extension {
   // ------------------------------------------------------------------ listas
@@ -212,8 +228,10 @@ export default class extends Extension {
     const h = (u.match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
     if (h.indexOf("mixdrop") !== -1 || h.indexOf("mxdrop") !== -1) return 0;
     if (h.indexOf("mp4upload") !== -1) return 1;
-    if (h.indexOf("dood") !== -1 || h.indexOf("playmogo") !== -1 || h.indexOf("ds2") !== -1) return 2;
-    return 3;
+    if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 2;
+    if (h.indexOf("voe") !== -1 || h.indexOf("derricknationtop") !== -1) return 3;
+    if (h.indexOf("dood") !== -1 || h.indexOf("playmogo") !== -1 || h.indexOf("ds2") !== -1) return 4;
+    return 5;
   }
 
   // Lista de servidores desde los botones data-player (base64).
@@ -246,6 +264,16 @@ export default class extends Extension {
     }
     if (/\.mp4(\?|#|$)/i.test(src)) {
       return { type: "mp4", url: src, headers: { Referer: referer, "User-Agent": UA } };
+    }
+
+    // Byse/Filemoon y VOE se resuelven aqui (sin proxy), igual que mixdrop.
+    if (BYSE_RE.test(src)) {
+      const r = await this.byse(src);
+      if (r) return r;
+    }
+    if (VOE_RE.test(src)) {
+      const r = await this.voe(src);
+      if (r) return r;
     }
 
     let html = "";
@@ -312,6 +340,350 @@ export default class extends Extension {
     if (!u) return null;
     u = this.fix(u);
     return { type: "mp4", url: u, headers: { Referer: "https://mixdrop.co/", "User-Agent": UA } };
+  }
+
+  // ---- Byse / Filemoon (API nueva con playback AES-256-GCM) --------------
+  async byse(embed) {
+    try {
+      if (typeof CryptoJS === "undefined") return null;
+      const src = this.fix(embed);
+      const origin = this.originOf(src);
+      const idm = src.match(/\/(?:e|v|embed)\/([A-Za-z0-9]+)/);
+      if (!origin || !idm) return null;
+      const id = idm[1];
+      const parent = origin + "/e/" + id;
+
+      const base = {
+        "User-Agent": UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": origin,
+        "Referer": parent,
+      };
+
+      const details = await this.jsonGet(
+        origin + "/api/videos/" + id + "/embed/details",
+        base
+      );
+      if (!details || !details.embed_frame_url) return null;
+
+      const iframe = details.embed_frame_url;
+      const io = this.originOf(iframe) || origin;
+      const frame = Object.assign({}, base, {
+        "Origin": io,
+        "Referer": iframe,
+        "x-embed-parent": parent,
+      });
+
+      // El iframe registra la sesion antes de pedir el captcha.
+      await this.jsonGet(io + "/api/videos/" + id + "/embed/settings", frame);
+
+      const viewer = this.rnd(16) + this.rnd(16);
+      const device = this.rnd(16) + this.rnd(16);
+      const auth = Object.assign({}, frame, {
+        "Cookie": "byse_viewer_id=" + viewer + "; byse_device_id=" + device,
+      });
+
+      const captcha = await this.jsonPost(
+        io + "/api/videos/" + id + "/embed/captcha",
+        Object.assign({}, auth, { "Content-Type": "application/json" }),
+        "{}"
+      );
+      if (!captcha || !captcha.pow_token) return null;
+
+      // El token del captcha sirve sin resolver el PoW (probado en vivo).
+      const token = captcha.pow_token;
+      const playback = await this.jsonPost(
+        io + "/api/videos/" + id + "/embed/playback",
+        Object.assign({}, auth, {
+          "Content-Type": "application/json",
+          "X-Captcha-Token": token,
+        }),
+        JSON.stringify({
+          fingerprint: { token: token, viewer_id: viewer, device_id: device },
+        })
+      );
+      if (!playback || !playback.playback) return null;
+
+      const data = this.byseDecrypt(playback.playback);
+      if (!data) return null;
+      const list = data.sources || (data.source ? [data] : []);
+      let pick = "";
+      let mime = "";
+      for (const s of list) {
+        const u = s && (s.url || s.file);
+        if (!u) continue;
+        const mimeType = String((s && s.mime_type) || "");
+        if (!pick || /mpegurl/i.test(mimeType)) {
+          pick = u;
+          mime = mimeType;
+        }
+        if (/mpegurl/i.test(mime)) break;
+      }
+      if (!pick) return null;
+      const isHls = /\.m3u8/i.test(pick) || /mpegurl/i.test(mime);
+      return {
+        type: isHls ? "hls" : "mp4",
+        url: this.fix(pick),
+        headers: { Referer: origin + "/", "User-Agent": UA },
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Descifra el JSON de playback: AES-256-GCM (tag al final) en modo CTR.
+  byseDecrypt(pl) {
+    try {
+      if (!pl || !pl.iv || !pl.payload || !pl.key_parts) return null;
+      if (typeof CryptoJS === "undefined") return null;
+      const parts = pl.key_parts;
+      let sel = parts;
+      const v = Number(pl.version);
+      if (v >= 1 && v <= 20) {
+        const a = v;
+        const b = 31 - v;
+        if (a <= parts.length && b <= parts.length) {
+          sel = [parts[a - 1], parts[b - 1]];
+        }
+      }
+      const keyHex = sel
+        .map((p) => this.b64wa(p).toString(CryptoJS.enc.Hex))
+        .join("");
+      const payload = this.b64wa(pl.payload);
+      const ctBytes = payload.sigBytes - 16;
+      if (ctBytes <= 0) return null;
+      const ct = CryptoJS.lib.WordArray.create(
+        payload.words.slice(0, Math.ceil(ctBytes / 4)),
+        ctBytes
+      );
+      // GCM con IV de 12 bytes: primer bloque de datos = IV || 0x00000002.
+      const ivHex = this.b64wa(pl.iv).toString(CryptoJS.enc.Hex) + "00000002";
+      const dec = CryptoJS.AES.decrypt(
+        { ciphertext: ct },
+        CryptoJS.enc.Hex.parse(keyHex),
+        {
+          iv: CryptoJS.enc.Hex.parse(ivHex),
+          mode: CryptoJS.mode.CTR,
+          padding: CryptoJS.pad.NoPadding,
+        }
+      );
+      return JSON.parse(dec.toString(CryptoJS.enc.Utf8));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  b64wa(s) {
+    let v = String(s || "").replace(/-/g, "+").replace(/_/g, "/");
+    while (v.length % 4) v += "=";
+    return CryptoJS.enc.Base64.parse(v);
+  }
+
+  async jsonGet(url, headers) {
+    const res = await this.request("", {
+      headers: Object.assign({ "Miru-Url": url }, headers),
+    });
+    if (typeof res === "string") {
+      try {
+        return JSON.parse(res);
+      } catch (_) {
+        return null;
+      }
+    }
+    return res;
+  }
+
+  async jsonPost(url, headers, data) {
+    const res = await this.request("", {
+      method: "post",
+      data: data,
+      headers: Object.assign({ "Miru-Url": url }, headers),
+    });
+    if (typeof res === "string") {
+      try {
+        return JSON.parse(res);
+      } catch (_) {
+        return null;
+      }
+    }
+    return res;
+  }
+
+  // ---- VOE (config ofuscada en <script type="application/json">) ---------
+  async voe(embed) {
+    try {
+      const src = this.fix(embed);
+      const id = (src.split("?")[0].split("/").filter(Boolean).pop() || "").trim();
+      if (!id) return null;
+      const search = (src.match(/\?[^#]*/) || [""])[0];
+      const host = (this.originOf(src) || "").replace(/^https?:\/\//i, "");
+      if (!host) return null;
+
+      const hosts = [host].concat(VOE_MIRRORS);
+      const seen = {};
+      let html = "";
+      let origin = this.originOf(src);
+
+      for (const h of hosts) {
+        if (seen[h]) continue;
+        seen[h] = true;
+        const page = "https://" + h + "/e/" + id + search;
+        let res = "";
+        try {
+          res = await this.request("", {
+            headers: {
+              "Miru-Url": page,
+              "Referer": "https://google.com/",
+              "User-Agent": UA,
+              "Accept":
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            },
+          });
+        } catch (_) {
+          continue;
+        }
+        if (typeof res !== "string" || !res) continue;
+
+        // voe.sx responde con un redirect por JavaScript al espejo real.
+        const red = res.match(
+          /window\.location\.href\s*=\s*['"](https?:\/\/[^'"]+)['"]/i
+        );
+        if (red && res.indexOf("application/json") === -1) {
+          try {
+            const r2 = await this.request("", {
+              headers: {
+                "Miru-Url": red[1],
+                "Referer": page,
+                "User-Agent": UA,
+              },
+            });
+            if (typeof r2 === "string" && r2) {
+              res = r2;
+              origin = this.originOf(red[1]) || origin;
+            }
+          } catch (_) {}
+        }
+
+        if (
+          res.indexOf('<script type="application/json">["') !== -1 ||
+          /\.m3u8/i.test(res)
+        ) {
+          html = res;
+          break;
+        }
+      }
+      if (!html) return null;
+
+      let url = "";
+      const m = html.match(
+        /<script type="application\/json">\["([^"]+)"\]<\/script>/
+      );
+      if (m) {
+        const cfg = this.voeDecode(m[1]);
+        if (cfg) url = cfg.source || cfg.file || "";
+      }
+
+      // Variante 2025: decodeURI(...) con offset -3 y reverse.
+      if (!url) {
+        const d = html.match(/decodeURI\(['"]([^'"]+)['"]\)/i);
+        if (d) {
+          try {
+            const str = decodeURIComponent(d[1]);
+            let off = "";
+            for (let i = 0; i < str.length; i++) {
+              off += String.fromCharCode(str.charCodeAt(i) - 3);
+            }
+            const rev = off.split("").reverse().join("");
+            const b = rev.match(/[A-Za-z0-9+/=]{50,}/);
+            if (b) {
+              const cfg = JSON.parse(this.utf8(this.b64u(b[0])));
+              url = cfg.file || cfg.source || cfg.url || "";
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (!url) {
+        const d = html.match(/['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i);
+        if (d) url = d[1];
+      }
+      if (!url) return null;
+
+      url = this.fix(url);
+      if (search && url.indexOf("t=") === -1) {
+        url += (url.indexOf("?") === -1 ? "?" : "&") + search.substring(1);
+      }
+      return {
+        type: /\.m3u8/i.test(url) ? "hls" : "mp4",
+        url: url,
+        headers: { Referer: origin + "/", "User-Agent": UA },
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  voeDecode(encoded) {
+    try {
+      const rot = String(encoded || "").replace(/[a-zA-Z]/g, (c) => {
+        const code = c.charCodeAt(0);
+        return String.fromCharCode(
+          (c <= "Z" ? 90 : 122) >= code + 13 ? code + 13 : code - 13
+        );
+      });
+      let str = rot;
+      for (const tag of ["@$", "^^", "~@", "%?", "*~", "!!", "#&"]) {
+        str = str.split(tag).join("");
+      }
+      const first = this.b64u(str);
+      let off = "";
+      for (let i = 0; i < first.length; i++) {
+        off += String.fromCharCode(first.charCodeAt(i) - 3);
+      }
+      const rev = off.split("").reverse().join("");
+      return JSON.parse(this.utf8(this.b64u(rev)));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  b64u(s) {
+    return this.b64(String(s || "").replace(/-/g, "+").replace(/_/g, "/"));
+  }
+
+  originOf(u) {
+    const m = String(u || "").match(/^(https?:\/\/[^\/]+)/i);
+    return m ? m[1] : "";
+  }
+
+  utf8(bin) {
+    let out = "";
+    let i = 0;
+    while (i < bin.length) {
+      const c = bin.charCodeAt(i++);
+      if (c < 0x80) {
+        out += String.fromCharCode(c);
+      } else if (c < 0xe0) {
+        out += String.fromCharCode(((c & 0x1f) << 6) | (bin.charCodeAt(i++) & 0x3f));
+      } else if (c < 0xf0) {
+        out += String.fromCharCode(
+          ((c & 0x0f) << 12) |
+            ((bin.charCodeAt(i++) & 0x3f) << 6) |
+            (bin.charCodeAt(i++) & 0x3f)
+        );
+      } else {
+        const cp =
+          ((c & 0x07) << 18) |
+          ((bin.charCodeAt(i++) & 0x3f) << 12) |
+          ((bin.charCodeAt(i++) & 0x3f) << 6) |
+          (bin.charCodeAt(i++) & 0x3f);
+        out += String.fromCodePoint(cp);
+      }
+    }
+    return out;
   }
 
   // ---- Filemoon y clones -------------------------------------------------
