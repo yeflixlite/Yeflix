@@ -1,6 +1,6 @@
 // ==MiruExtension==
-// @name         PelisJuanita
-// @version      v0.1.0
+// @name         Pelis
+// @version      v0.1.1
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -92,13 +92,33 @@ export default class extends Extension {
     const u = this.canonical(url);
 
     if (/movieInfo\.php/i.test(u)) {
-      const html = await this.get(u, SITE + "/movies/");
+      const html = await this.get(u, SITE + "/movies/", true);
       const info = this.info(html);
+      const langs = this.langs(html);
+      const groups = [];
+      if (langs.length) {
+        for (const lang of langs) {
+          groups.push({
+            title: this.langName(lang),
+            urls: [
+              {
+                name: "Ver pelicula",
+                url: u + (u.indexOf("?") === -1 ? "?" : "&") + "lang=" + encodeURIComponent(lang),
+              },
+            ],
+          });
+        }
+      } else {
+        groups.push({
+          title: "Pelicula",
+          urls: [{ name: "Ver pelicula", url: u }],
+        });
+      }
       return {
         title: info.title || "Pelicula",
         cover: info.cover,
         desc: info.desc,
-        episodes: [{ title: "Pelicula", urls: [{ name: "Ver pelicula", url: u }] }],
+        episodes: groups,
       };
     }
 
@@ -106,7 +126,7 @@ export default class extends Extension {
     if (!slug) return { title: "", cover: "", desc: "", episodes: [] };
 
     const base = SERIES_INFO + "?nombreSerie=" + encodeURIComponent(slug);
-    const html = await this.get(base, SITE + "/series/");
+    const html = await this.get(base, SITE + "/series/", true);
     const info = this.info(html);
 
     const seasons = [];
@@ -130,7 +150,7 @@ export default class extends Extension {
         "&snum=1&enum=1";
       let list = "";
       try {
-        list = await this.get(listUrl, SITE + "/series/");
+        list = await this.get(listUrl, SITE + "/series/", true);
       } catch (_) {
         list = "";
       }
@@ -176,19 +196,40 @@ export default class extends Extension {
 
   // ------------------------------------------------------------------ watch
   async watch(url) {
-    const u = this.canonical(url);
-    const referer = /movieInfo\.php/i.test(u) ? SITE + "/movies/" : SITE + "/series/";
-    const html = await this.get(u, referer);
+    const raw = this.fix(url);
+    if (!raw) return this.err("URL vacia");
+
+    // El reproductor pide cambiar de servidor: recibe directamente el embed.
+    if (!/pelisjuanita\.com|movieInfo\.php|serieInfo\.php/i.test(raw)) {
+      if (!this.hostInfo(raw)) return this.err("Servidor no soportado");
+      const direct = await this.resolveEmbed(raw, SITE + "/");
+      if (direct && direct.url) return direct;
+      return this.err("Servidor no resoluble");
+    }
+
+    const u = this.canonical(raw);
+    const isMovie = /movieInfo\.php/i.test(u);
+    const referer = isMovie ? SITE + "/movies/" : SITE + "/series/";
+    const html = await this.get(u, referer, true);
     if (!html) return this.err("No se pudo abrir el reproductor");
 
-    const list = this.rows(html);
+    const lang = (this.param(u, "lang") || "").toLowerCase();
+    let list = [];
+    for (const s of this.rows(html)) {
+      const h = this.hostInfo(s.url);
+      if (!h) continue;
+      if (lang && (s.lang || "").toLowerCase() !== lang) continue;
+      list.push({ name: h.name, url: s.url, lang: s.lang || "" });
+    }
+    if (!list.length) return this.err("Sin servidores disponibles");
+
     const map = {};
     for (const s of list) {
-      let key = s.name || "Servidor";
-      if (s.lang) key += " (" + s.lang + ")";
+      let label = s.name;
       let n = 2;
-      while (map[key]) key = (s.name || "Servidor") + " #" + n++;
-      map[key] = s.url;
+      while (map[label]) label = s.name + " #" + n++;
+      s.label = label;
+      map[label] = s.url;
     }
     const extra = { "X-Servers": JSON.stringify(map) };
 
@@ -196,18 +237,54 @@ export default class extends Extension {
     for (const s of ordered) {
       let r = null;
       try {
-        r = await this.resolveEmbed(s.url, u);
+        r = await this.resolveEmbed(s.url, referer);
       } catch (_) {
         r = null;
       }
       if (r && r.url) {
         r.headers = Object.assign({}, r.headers, extra, {
-          "X-Primary-Server": s.name || "Servidor",
+          "X-Primary-Server": s.label,
         });
         return r;
       }
     }
     return Object.assign(this.err("Ningun servidor resoluble"), { headers: extra });
+  }
+
+  langs(html) {
+    const out = [];
+    for (const s of this.rows(html)) {
+      if (!this.hostInfo(s.url)) continue;
+      const l = (s.lang || "").toLowerCase();
+      if (!l) continue;
+      if (out.indexOf(l) === -1) out.push(l);
+    }
+    return out;
+  }
+
+  langName(lang) {
+    const l = String(lang || "").toLowerCase();
+    if (l.indexOf("latino") !== -1) return "Español Latino";
+    if (l.indexOf("castellano") !== -1) return "Español Castellano";
+    if (l.indexOf("sub") !== -1) return "Subtitulada";
+    if (l.indexOf("ingl") !== -1 || l.indexOf("english") !== -1) return "Inglés";
+    if (l.indexOf("port") !== -1) return "Portugués";
+    return l.charAt(0).toUpperCase() + l.slice(1);
+  }
+
+  hostInfo(u) {
+    const s = String(u || "");
+    if (/bysesukior|byse\.|filemoon|filemooon|moonplayer/i.test(s)) {
+      return { key: "filemoon", name: "Filemoon" };
+    }
+    if (VOE_RE.test(s)) return { key: "voe", name: "Voe" };
+    if (/streamwish|hglink|playnixes|hglamioz|medixiru|awish/i.test(s)) {
+      return { key: "streamwish", name: "StreamWish" };
+    }
+    if (/vidhide|earnvids|morencius|vhide|vid-hide/i.test(s)) {
+      return { key: "vidhide", name: "VidHide" };
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------ sesion
@@ -249,8 +326,8 @@ export default class extends Extension {
     );
   }
 
-  async get(url, referer) {
-    await this.ensure();
+  async get(url, referer, authed) {
+    if (authed) await this.ensure();
     const headers = {
       "Miru-Url": url,
       "Referer": referer || SITE + "/",
@@ -270,6 +347,15 @@ export default class extends Extension {
       res = "";
     }
     if (typeof res !== "string") return "";
+
+    if (!authed && this.isGate(res)) {
+      await this.ensure();
+      try {
+        res = await this.request("", { headers });
+      } catch (_) {
+        res = "";
+      }
+    }
 
     if (this.isGate(res)) {
       this._auth = null;
@@ -435,12 +521,9 @@ export default class extends Extension {
     const h = (String(u || "").match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
     if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 0;
     if (h.indexOf("voe") !== -1) return 1;
-    if (h.indexOf("mixdrop") !== -1 || h.indexOf("mxdrop") !== -1) return 2;
-    if (h.indexOf("vimeus") !== -1 || h.indexOf("vimeos") !== -1) return 3;
-    if (h.indexOf("streamwish") !== -1 || h.indexOf("awish") !== -1) return 4;
-    if (h.indexOf("mp4upload") !== -1) return 5;
-    if (h.indexOf("playmogo") !== -1 || h.indexOf("dood") !== -1) return 6;
-    return 7;
+    if (h.indexOf("streamwish") !== -1 || h.indexOf("hglink") !== -1) return 2;
+    if (h.indexOf("vidhide") !== -1 || h.indexOf("earnvids") !== -1) return 3;
+    return 9;
   }
 
   async resolveEmbed(embed, referer) {

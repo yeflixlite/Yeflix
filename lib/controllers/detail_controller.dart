@@ -330,6 +330,96 @@ class DetailPageController extends GetxController {
     Get.find<HomePageController>().onRefresh();
   }
 
+  Future<void> watchWithPicker(BuildContext context) async {
+    final groups = detail?.episodes;
+    if (groups == null || groups.isEmpty) return;
+    if (groups.length == 1) {
+      goWatch(context, groups[0].urls, 0, 0);
+      return;
+    }
+
+    int? picked;
+    if (Platform.isAndroid) {
+      picked = await showModalBottomSheet<int>(
+        context: context,
+        backgroundColor: const Color(0xFF17171B),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 10, bottom: 4),
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(18, 8, 18, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    "Elige temporada o idioma",
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: groups.length,
+                  itemBuilder: (_, i) => ListTile(
+                    leading: const Icon(Icons.play_circle_outline),
+                    title: Text(groups[i].title),
+                    subtitle: Text(
+                      groups[i].urls.length == 1
+                          ? "1 opción"
+                          : "${groups[i].urls.length} opciones",
+                    ),
+                    onTap: () => Navigator.of(ctx).pop(i),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else {
+      picked = await fluent.showDialog<int>(
+        context: context,
+        builder: (ctx) => fluent.ContentDialog(
+          title: const Text("Elige temporada o idioma"),
+          content: SizedBox(
+            width: 340,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: groups.length,
+              itemBuilder: (_, i) => fluent.ListTile(
+                title: Text(groups[i].title),
+                subtitle: Text("${groups[i].urls.length} opciones"),
+                onPressed: () => Navigator.of(ctx).pop(i),
+              ),
+            ),
+          ),
+          actions: [
+            fluent.Button(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text("Cancelar"),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (picked == null) return;
+    goWatch(context, groups[picked].urls, 0, picked);
+  }
+
   goWatch(
     BuildContext context,
     List<ExtensionEpisode> urls,

@@ -84,12 +84,7 @@ class _DetailContinuePlayState extends State<DetailContinuePlay> {
       if (data!.episodes != null && data.episodes!.isNotEmpty) {
         return FilledButton.icon(
           onPressed: () {
-            c.goWatch(
-              context,
-              data.episodes![0].urls,
-              0,
-              0,
-            );
+            c.watchWithPicker(context);
           },
           icon: const Icon(Icons.play_arrow),
           label: Text(watchNowString),
