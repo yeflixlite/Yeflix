@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis
-// @version      v0.1.1
+// @version      v0.1.2
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -30,7 +30,7 @@
 //
 // Los servidores vienen en <div class='row-download' data-tipo='stream'
 // data-url='<embed>'>. Se resuelven sin proxy: byse/filemoon (AES-256-GCM),
-// voe, mixdrop, streamwish (packer) y vimeus (packer).
+// voe, mixdrop, streamwish (CDN hls2/hls3), vidhide (packer) y vimeus.
 
 const SITE = "https://pelisjuanita.com";
 const MOVIES = SITE + "/movies/movies.php";

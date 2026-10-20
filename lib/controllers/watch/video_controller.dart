@@ -155,6 +155,7 @@ class VideoPlayerController extends GetxController {
   final serverReferers = <String, String>{}; // nombre → referer (no observable)
   final currentServerName = ''.obs;
   final serverFailedMessage = ''.obs;
+  final currentLanguage = ''.obs;
 
 
   // 字幕配置
@@ -639,11 +640,13 @@ class VideoPlayerController extends GetxController {
       // Servidor actual
       currentServerName.value = headers['X-Primary-Server'] ??
           (availableServers.isNotEmpty ? availableServers.keys.first : '');
+      currentLanguage.value = headers['X-Language'] ?? '';
       // Limpiar cabeceras especiales — no enviar al player
       watchData!.headers = Map.from(headers)
         ..remove('X-Servers')
         ..remove('X-Server-Referers')
-        ..remove('X-Primary-Server');
+        ..remove('X-Primary-Server')
+        ..remove('X-Language');
     }
   }
 
