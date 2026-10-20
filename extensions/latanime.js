@@ -1,6 +1,6 @@
-// ==MiruExtension==
+﻿// ==MiruExtension==
 // @name         Latanime
-// @version      v0.1.3
+// @version      v0.1.4
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -224,12 +224,13 @@ export default class extends Extension {
 
   // Prioridad de servidores: los que sabemos resolver/reproducir primero.
   // mixdrop va primero: mp4upload usa el puerto 183 y suele dar timeout/403.
+  // Prioridad de servidores. byse primero y voe como respaldo automatico.
   rankHost(u) {
     const h = (u.match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
-    if (h.indexOf("mixdrop") !== -1 || h.indexOf("mxdrop") !== -1) return 0;
-    if (h.indexOf("mp4upload") !== -1) return 1;
-    if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 2;
-    if (h.indexOf("voe") !== -1 || h.indexOf("derricknationtop") !== -1) return 3;
+    if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 0;
+    if (h.indexOf("voe") !== -1 || h.indexOf("derricknationtop") !== -1) return 1;
+    if (h.indexOf("mixdrop") !== -1 || h.indexOf("mxdrop") !== -1) return 2;
+    if (h.indexOf("mp4upload") !== -1) return 3;
     if (h.indexOf("dood") !== -1 || h.indexOf("playmogo") !== -1 || h.indexOf("ds2") !== -1) return 4;
     return 5;
   }
