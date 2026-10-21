@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis Premium
-// @version      v0.1.1
+// @version      v0.1.2
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -45,6 +45,9 @@ const SW_HOSTS = [
   "hglink.to",
   "streamhg.com",
   "streamwish.to",
+  "hgcloud.to",
+  "awish.pro",
+  "streamhide.to",
 ];
 
 export default class extends Extension {
@@ -341,7 +344,9 @@ export default class extends Extension {
 
     if (this.hostInfo(raw) && !/pelispedia\./i.test(raw)) {
       const direct = await this.resolveEmbed(raw, SITE + "/");
-      if (direct && direct.url && !String(direct.url).startsWith("error://")) return direct;
+      if (direct && direct.url && !String(direct.url).startsWith("error://")) {
+        if (direct.verified || (await this.probeStream(direct))) return direct;
+      }
       return this.err("Servidor no resoluble");
     }
 
@@ -391,7 +396,7 @@ export default class extends Extension {
         r = null;
       }
       if (!r || !r.url || String(r.url).startsWith("error://")) continue;
-      if (await this.probeStream(r)) {
+      if (r.verified || (await this.probeStream(r))) {
         r.headers = Object.assign({}, r.headers || {}, {
           "X-Servers": JSON.stringify(headers),
           "X-Primary-Server": s.label,
@@ -414,6 +419,7 @@ export default class extends Extension {
   async probeStream(r) {
     if (!r || !r.url || r.url.startsWith("error://")) return false;
     if (!/^https?:\/\//i.test(r.url)) return true;
+    if (!/\.m3u8|master\.txt|playlist\.txt|\/hls\//i.test(r.url)) return true;
     const get = this.request("", {
       headers: Object.assign({ "Miru-Url": r.url }, r.headers || {}),
     }).catch(() => "");
@@ -422,14 +428,10 @@ export default class extends Extension {
         typeof setTimeout === "function"
           ? await Promise.race([
               get,
-              new Promise((res) => setTimeout(() => res(""), 7000)),
+              new Promise((res) => setTimeout(() => res(""), 3500)),
             ])
           : await get;
-      if (typeof body !== "string" || !body) return false;
-      if (/\.m3u8|master\.txt|playlist\.txt|\/hls\//i.test(r.url)) {
-        return body.indexOf("#EXTM3U") !== -1;
-      }
-      return true;
+      return typeof body === "string" && body.indexOf("#EXTM3U") !== -1;
     } catch (_) {
       return false;
     }
@@ -441,7 +443,7 @@ export default class extends Extension {
       return { key: "filemoon", name: "Filemoon" };
     }
     if (VOE_RE.test(s)) return { key: "voe", name: "Voe" };
-    if (/streamwish|hglink|streamhg|playnixes|hglamioz|medixiru|awish/i.test(s)) {
+    if (/streamwish|hglink|streamhg|playnixes|hglamioz|medixiru|awish|hgcloud|sfastwish|wishfast|streamhide|desiupload/i.test(s)) {
       return { key: "streamwish", name: "StreamWish" };
     }
     if (/vidhide|earnvids|morencius|callistanise|minochinos|vsharea|vhide|vid-hide/i.test(s)) {
@@ -525,7 +527,11 @@ export default class extends Extension {
       h.indexOf("streamhg") !== -1 ||
       h.indexOf("playnixes") !== -1 ||
       h.indexOf("hglamioz") !== -1 ||
-      h.indexOf("medixiru") !== -1
+      h.indexOf("medixiru") !== -1 ||
+      h.indexOf("hglink") !== -1 ||
+      h.indexOf("hgcloud") !== -1 ||
+      h.indexOf("awish") !== -1 ||
+      h.indexOf("streamhide") !== -1
     )
       return 0;
     if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 1;
@@ -599,88 +605,229 @@ export default class extends Extension {
     return this.findStream(html, src);
   }
 
-  // ---- StreamWish (packer links.hls2/hls3 + CDN real) --------------------
+  // ---- StreamWish: mirrors en paralelo + m3u8 mas rapido + cache ----
   async streamwish(embed) {
     const src = this.fix(embed);
     const clean = src.split("#")[0];
-    let id = (clean.split("?")[0].split("/").filter(Boolean).pop() || "").replace(
+    const id = (clean.split("?")[0].split("/").filter(Boolean).pop() || "").replace(
       /\.html?$/i,
       ""
     );
     if (!id) return null;
     const search = (clean.match(/\?[^#]*/) || [""])[0];
-    const own = (this.originOf(src) || "").replace(/^https?:\/\//i, "").toLowerCase();
+    const own = (this.originOf(src) || "")
+      .replace(/^https?:\/\//i, "")
+      .replace(/^www\./i, "")
+      .replace(/\/.*$/, "")
+      .toLowerCase();
 
-    const hosts = SW_HOSTS.concat([own]);
-    const seen = {};
-    for (const h of hosts.slice(0, 4)) {
-      if (!h || seen[h]) continue;
-      seen[h] = true;
-      for (const path of ["/e/", "/v/"]) {
-        const page = "https://" + h + path + id + search;
-        let html = "";
-        try {
-          html = await this.request("", {
-            headers: {
-              "Miru-Url": page,
-              "Referer": "https://www.google.com/",
-              "User-Agent": UA,
-              "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-              "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-            },
-          });
-        } catch (_) {
-          html = "";
-        }
-        if (typeof html !== "string" || html.length < 500) continue;
-        // Cascara "Page is loading": reintento con la cookie ya guardada.
-        if (html.indexOf("Page is loading") !== -1 || html.indexOf("Redirecting") !== -1) {
-          try {
-            html = await this.request("", {
-              headers: { "Miru-Url": page, "Referer": page, "User-Agent": UA },
-            });
-          } catch (_) {}
-        }
-        if (typeof html !== "string" || !html) continue;
-        if (html.indexOf("Just a moment") !== -1) continue;
-
-        const r = await this.swHtml(html, "https://" + h);
-        if (r) return r;
-        const d = html.match(/["']((?:https?:)?\/\/[^"']+\.m3u8[^"']*)["']/i);
-        if (d) {
-          return {
-            type: "hls",
-            url: this.fix(d[1]),
-            headers: { Referer: "https://" + h + "/", "User-Agent": UA },
-          };
-        }
-      }
+    this._sw = this._sw || {};
+    const now = Date.now();
+    const hit = this._sw[id];
+    if (hit && hit.exp > now) {
+      return { type: "hls", url: hit.url, headers: Object.assign({}, hit.headers) };
     }
-    return null;
+
+    const norm = (h) =>
+      String(h || "")
+        .replace(/^https?:\/\//i, "")
+        .replace(/^www\./i, "")
+        .replace(/\/.*$/, "")
+        .toLowerCase();
+
+    // Ola 1: mirrors que sirven el HTML directo (hglink/streamwish usan JS).
+    const wave1 = [];
+    const add1 = (h) => {
+      h = norm(h);
+      if (h && wave1.indexOf(h) === -1) wave1.push(h);
+    };
+    if (!/^(hglink\.to|streamwish\.to|streamhg\.com)$/i.test(own)) add1(own);
+    add1("playnixes.com");
+    add1("hglamioz.com");
+    add1("medixiru.com");
+
+    let got = await this.swFirst(wave1.map((h) => this.swHost(h, id, search)));
+    if (!got) {
+      const wave2 = SW_HOSTS.map(norm).filter((h) => wave1.indexOf(h) === -1);
+      got = await this.swFirst(wave2.map((h) => this.swHost(h, id, search)));
+    }
+    if (!got) return null;
+
+    const picked = await this.swPick(got.cands);
+    if (!picked) return null;
+
+    this._sw[id] = {
+      url: picked.url,
+      headers: Object.assign({}, picked.headers || {}),
+      exp: now + 600000,
+    };
+    return {
+      type: "hls",
+      url: picked.url,
+      headers: picked.headers,
+      verified: !!picked.verified,
+    };
+  }
+
+  async swHost(host, id, search) {
+    try {
+      let html = await this.swGet(
+        "https://" + host + "/e/" + id + search,
+        "https://www.google.com/"
+      );
+      let cands = this.swHtml(html, "https://" + host);
+      if (!cands.length) {
+        html = await this.swGet(
+          "https://" + host + "/v/" + id + search,
+          "https://" + host + "/"
+        );
+        cands = this.swHtml(html, "https://" + host);
+      }
+      return cands.length ? { host: host, cands: cands } : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async swGet(url, referer) {
+    const req = this.request("", {
+      headers: {
+        "Miru-Url": url,
+        "Referer": referer || "https://www.google.com/",
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+      },
+    }).catch(() => "");
+    let html = "";
+    try {
+      html =
+        typeof setTimeout === "function"
+          ? await Promise.race([
+              req,
+              new Promise((res) => setTimeout(() => res(""), 5000)),
+            ])
+          : await req;
+    } catch (_) {
+      return "";
+    }
+    if (typeof html !== "string" || html.length < 800) return "";
+    if (/Page is loading|Redirecting|Just a moment/i.test(html)) return "";
+    return html;
   }
 
   swHtml(html, base) {
-    const un = this.unpack(this.locate(html, "links"));
-    if (!un) return null;
-    const block = un.match(/links\s*=\s*\{([\s\S]*?)\}/);
-    if (!block) return null;
+    const out = [];
+    let un = this.unpack(this.locate(html, "links"));
+    if (!un) un = this.unpack(this.locate(html, "sources"));
+    if (!un) return out;
+    const block =
+      un.match(/links\s*=\s*\{([\s\S]*?)\}/) ||
+      un.match(/sources\s*[:=]\s*\[([\s\S]*?)\]/);
+    if (!block) return out;
     const links = {};
     const re = /["']([a-zA-Z0-9_]+)["']\s*:\s*["']([^"']+)["']/g;
     let m;
     while ((m = re.exec(block[1]))) links[m[1]] = m[2];
-    for (const k of ["hls2", "hls3", "hls4"]) {
+
+    const keys = ["hls2", "hls4", "hls3"].concat(Object.keys(links));
+    const seen = {};
+    for (const k of keys) {
+      if (seen[k]) continue;
+      seen[k] = true;
       let u = this.fix(links[k] || "");
       if (!u) continue;
-      if (u.indexOf("/") === 0) u = (base || "") + u;
+      let rooted = false;
+      if (u.indexOf("/") === 0) {
+        u = base + u;
+        rooted = true;
+      }
       if (!/\.m3u8|master\.txt|playlist\.txt|\/hls\//i.test(u)) continue;
-      const ref = k === "hls4" ? (base || "") + "/" : "https://streamwish.to/";
-      return {
+      const ref = k === "hls4" || rooted ? base + "/" : "https://streamwish.to/";
+      out.push({
         type: "hls",
         url: u,
         headers: { Referer: ref, "User-Agent": UA },
-      };
+      });
     }
-    return null;
+
+    // Sin packer: cualquier m3u8 suelto en el HTML.
+    if (!out.length) {
+      const rx = /["']((?:https?:)?\/\/[^"'\s]+\.m3u8[^"'\s]*|\/[^"'\s]+\.m3u8[^"'\s]*)["']/gi;
+      while ((m = rx.exec(String(html || ""))) !== null) {
+        let u = this.fix(m[1]);
+        if (u.indexOf("/") === 0) u = base + u;
+        if (!out.some((x) => x.url === u)) {
+          out.push({
+            type: "hls",
+            url: u,
+            headers: { Referer: base + "/", "User-Agent": UA },
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  swPick(cands) {
+    if (!cands || !cands.length) return Promise.resolve(null);
+    if (cands.length === 1) return Promise.resolve(cands[0]);
+    // La ruta /stream/ del mirror suele ser el CDN directo: se prueba sola
+    // (~0.4s) y solo si falla se compite con hls2/hls3.
+    const quick = cands.filter((c) => /\/stream\//i.test(c.url));
+    if (quick.length) {
+      return this.swProbe(quick[0], 1600).then((r) => {
+        if (r) return r;
+        const rest = cands.filter((c) => c !== quick[0]);
+        return this.swFirst(rest.map((c) => this.swProbe(c))).then(
+          (x) => x || quick[0]
+        );
+      });
+    }
+    return this.swFirst(cands.map((c) => this.swProbe(c))).then(
+      (r) => r || cands[0]
+    );
+  }
+
+  swProbe(c, ms) {
+    const req = this.request("", {
+      headers: Object.assign({ "Miru-Url": c.url }, c.headers || {}),
+    })
+      .then((body) =>
+        typeof body === "string" && body.indexOf("#EXTM3U") !== -1
+          ? Object.assign({}, c, { verified: true })
+          : null
+      )
+      .catch(() => null);
+    if (typeof setTimeout !== "function") return req;
+    return Promise.race([
+      req,
+      new Promise((res) => setTimeout(() => res(null), ms || 4000)),
+    ]);
+  }
+
+  swFirst(tasks) {
+    return new Promise((resolve) => {
+      let pending = tasks.length;
+      let done = false;
+      if (!pending) return resolve(null);
+      for (const t of tasks) {
+        Promise.resolve(t)
+          .then(
+            (r) => {
+              if (!done && r) {
+                done = true;
+                resolve(r);
+              }
+            },
+            () => {}
+          )
+          .then(() => {
+            pending--;
+            if (!pending && !done) resolve(null);
+          });
+      }
+    });
   }
 
   // ---- VidHide / Earnvids (packer con file: *.m3u8) ---------------------
