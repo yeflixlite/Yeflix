@@ -111,7 +111,9 @@ class HomePageController extends GetxController {
       final package = entry.key.extension.package;
       for (final item in entry.value) {
         final u = item.url.toLowerCase();
-        if (u.contains("serieinfo") || u.contains("ver-serie")) {
+        if (u.contains("serieinfo") ||
+            u.contains("ver-serie") ||
+            u.contains("/serie/")) {
           sr.add(CatalogItem(item, package));
         } else if (u.contains("movieinfo") || u.contains("/pelicula/")) {
           mv.add(CatalogItem(item, package));
