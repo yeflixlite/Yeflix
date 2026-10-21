@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis
-// @version      v0.1.3
+// @version      v0.1.4
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -66,22 +66,52 @@ export default class extends Extension {
   // ------------------------------------------------------------------ listas
   async latest(page) {
     const p = Math.max(1, parseInt(page) || 1);
-    let out = [];
+    let mv = [];
+    let sr = [];
     try {
-      const mv = await this.get(MOVIES + "?ultimas-agregadas&page=" + p, SITE + "/movies/");
-      out = out.concat(this.cards(mv, "movie"));
+      const html = await this.get(MOVIES + "?ultimas-agregadas&page=" + p, SITE + "/movies/");
+      mv = this.cards(html, "movie");
     } catch (_) {}
     try {
-      const sr = await this.get(SERIES + "?ultimas-agregadas&page=" + p, SITE + "/series/");
-      out = out.concat(this.cards(sr, "serie"));
+      const html = await this.get(SERIES + "?ultimas-agregadas&page=" + p, SITE + "/series/");
+      sr = this.cards(html, "serie");
     } catch (_) {}
-    return this.dedupe(out);
+    mv = await this.filterPlayable(this.dedupe(mv), 5000);
+    sr = await this.filterPlayable(this.dedupe(sr), 5000);
+    const out = [];
+    const seen = {};
+    for (const it of mv.concat(sr)) {
+      const k = this.normTitle(it.title);
+      if (seen[k]) continue;
+      seen[k] = 1;
+      out.push(it);
+    }
+    return out;
   }
 
   async search(kw, page) {
-    const q = encodeURIComponent(String(kw || "").trim());
-    if (!q) return [];
+    const text = String(kw || "").trim();
+    if (!text) return [];
     const p = Math.max(1, parseInt(page) || 1);
+    let out = await this.searchPage(encodeURIComponent(text), p);
+    // La busqueda del sitio falla con frases largas: reintenta por palabra.
+    if (!out.length) {
+      const stop = ["the", "los", "las", "del", "una", "uno", "por", "para", "con", "and", "que", "el", "la", "de"];
+      const tokens = text
+        .toLowerCase()
+        .split(/\s+/)
+        .map((t) => t.replace(/[^a-z0-9áéíóúñü-]/gi, ""))
+        .filter((t) => t.length > 2 && stop.indexOf(t) === -1)
+        .sort((a, b) => b.length - a.length);
+      for (const t of tokens) {
+        out = await this.searchPage(encodeURIComponent(t), p);
+        if (out.length) break;
+      }
+    }
+    return await this.filterPlayable(this.dedupe(out), 10000);
+  }
+
+  async searchPage(q, p) {
     let out = [];
     try {
       const mv = await this.get(MOVIES + "?s=" + q + "&page=" + p, SITE + "/movies/");
@@ -91,7 +121,32 @@ export default class extends Extension {
       const sr = await this.get(SERIES + "?s=" + q + "&page=" + p, SITE + "/series/");
       out = out.concat(this.cards(sr, "serie"));
     } catch (_) {}
-    return this.dedupe(out);
+    return out;
+  }
+
+  // true si el titulo tiene al menos un servidor esencial
+  async hasEssential(it) {
+    if (!this._ess) this._ess = {};
+    const key = it.url;
+    if (this._ess[key] !== undefined) return this._ess[key];
+    let ok = false;
+    try {
+      const html = await this.get(key, SITE + "/movies/", true);
+      ok = this.rows(html).some((s) => this.hostInfo(s.url));
+    } catch (_) {}
+    this._ess[key] = ok;
+    return ok;
+  }
+
+  // Verifica solo hasta agotar el presupuesto: el sitio tarda ~1s por titulo.
+  async filterPlayable(list, budget) {
+    const out = [];
+    const start = Date.now();
+    for (const it of list) {
+      if (Date.now() - start > budget) break;
+      if (await this.hasEssential(it)) out.push(it);
+    }
+    return out;
   }
 
   // ------------------------------------------------------------------ detalle
