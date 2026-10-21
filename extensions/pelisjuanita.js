@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis
-// @version      v0.1.4
+// @version      v0.1.5
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -66,27 +66,16 @@ export default class extends Extension {
   // ------------------------------------------------------------------ listas
   async latest(page) {
     const p = Math.max(1, parseInt(page) || 1);
-    let mv = [];
-    let sr = [];
-    try {
-      const html = await this.get(MOVIES + "?ultimas-agregadas&page=" + p, SITE + "/movies/");
-      mv = this.cards(html, "movie");
-    } catch (_) {}
-    try {
-      const html = await this.get(SERIES + "?ultimas-agregadas&page=" + p, SITE + "/series/");
-      sr = this.cards(html, "serie");
-    } catch (_) {}
-    mv = await this.filterPlayable(this.dedupe(mv), 5000);
-    sr = await this.filterPlayable(this.dedupe(sr), 5000);
-    const out = [];
-    const seen = {};
-    for (const it of mv.concat(sr)) {
-      const k = this.normTitle(it.title);
-      if (seen[k]) continue;
-      seen[k] = 1;
-      out.push(it);
-    }
-    return out;
+    const urls = [
+      [MOVIES + "?ultimas-agregadas&page=" + p, SITE + "/movies/"],
+      [SERIES + "?ultimas-agregadas&page=" + p, SITE + "/series/"],
+    ];
+    const html = await Promise.all(
+      urls.map((u) => this.get(u[0], u[1]).catch(() => ""))
+    );
+    return this.dedupe(
+      this.cards(html[0], "movie").concat(this.cards(html[1], "serie"))
+    );
   }
 
   async search(kw, page) {
@@ -108,45 +97,18 @@ export default class extends Extension {
         if (out.length) break;
       }
     }
-    return await this.filterPlayable(this.dedupe(out), 10000);
+    return this.dedupe(out);
   }
 
   async searchPage(q, p) {
-    let out = [];
-    try {
-      const mv = await this.get(MOVIES + "?s=" + q + "&page=" + p, SITE + "/movies/");
-      out = out.concat(this.cards(mv, "movie"));
-    } catch (_) {}
-    try {
-      const sr = await this.get(SERIES + "?s=" + q + "&page=" + p, SITE + "/series/");
-      out = out.concat(this.cards(sr, "serie"));
-    } catch (_) {}
-    return out;
-  }
-
-  // true si el titulo tiene al menos un servidor esencial
-  async hasEssential(it) {
-    if (!this._ess) this._ess = {};
-    const key = it.url;
-    if (this._ess[key] !== undefined) return this._ess[key];
-    let ok = false;
-    try {
-      const html = await this.get(key, SITE + "/movies/", true);
-      ok = this.rows(html).some((s) => this.hostInfo(s.url));
-    } catch (_) {}
-    this._ess[key] = ok;
-    return ok;
-  }
-
-  // Verifica solo hasta agotar el presupuesto: el sitio tarda ~1s por titulo.
-  async filterPlayable(list, budget) {
-    const out = [];
-    const start = Date.now();
-    for (const it of list) {
-      if (Date.now() - start > budget) break;
-      if (await this.hasEssential(it)) out.push(it);
-    }
-    return out;
+    const urls = [
+      [MOVIES + "?s=" + q + "&page=" + p, SITE + "/movies/"],
+      [SERIES + "?s=" + q + "&page=" + p, SITE + "/series/"],
+    ];
+    const html = await Promise.all(
+      urls.map((u) => this.get(u[0], u[1]).catch(() => ""))
+    );
+    return this.cards(html[0], "movie").concat(this.cards(html[1], "serie"));
   }
 
   // ------------------------------------------------------------------ detalle
@@ -646,8 +608,6 @@ export default class extends Extension {
   // ------------------------------------------------------------------ servidores
   rankHost(u) {
     const h = (String(u || "").match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
-    if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 0;
-    if (h.indexOf("voe") !== -1) return 1;
     if (
       h.indexOf("streamwish") !== -1 ||
       h.indexOf("hglink") !== -1 ||
@@ -656,7 +616,8 @@ export default class extends Extension {
       h.indexOf("hglamioz") !== -1 ||
       h.indexOf("medixiru") !== -1
     )
-      return 2;
+      return 0;
+    if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 1;
     if (
       h.indexOf("vidhide") !== -1 ||
       h.indexOf("earnvids") !== -1 ||
@@ -664,7 +625,8 @@ export default class extends Extension {
       h.indexOf("minochinos") !== -1 ||
       h.indexOf("vsharea") !== -1
     )
-      return 3;
+      return 2;
+    if (h.indexOf("voe") !== -1) return 3;
     return 9;
   }
 
@@ -690,7 +652,7 @@ export default class extends Extension {
       const r = await this.streamwish(src);
       if (r) return r;
     }
-    if (/vidhide|earnvids|morencius|vhide|vid-hide/i.test(src)) {
+    if (/vidhide|earnvids|morencius|callistanise|minochinos|vsharea|vhide|vid-hide/i.test(src)) {
       const r = await this.vidhide(src);
       if (r) return r;
     }
@@ -737,9 +699,9 @@ export default class extends Extension {
     const search = (clean.match(/\?[^#]*/) || [""])[0];
     const own = (this.originOf(src) || "").replace(/^https?:\/\//i, "").toLowerCase();
 
-    const hosts = [own].concat(SW_HOSTS);
+    const hosts = SW_HOSTS.concat([own]);
     const seen = {};
-    for (const h of hosts) {
+    for (const h of hosts.slice(0, 4)) {
       if (!h || seen[h]) continue;
       seen[h] = true;
       for (const path of ["/e/", "/v/"]) {
@@ -829,7 +791,7 @@ export default class extends Extension {
       "vidhide.com",
     ]);
     const seen = {};
-    for (const h of hosts) {
+    for (const h of hosts.slice(0, 4)) {
       if (!h || seen[h]) continue;
       seen[h] = true;
       const page = "https://" + h + "/v/" + id + search;
