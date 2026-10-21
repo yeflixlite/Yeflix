@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis Premium
-// @version      v0.1.0
+// @version      v0.1.1
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -136,8 +136,8 @@ export default class extends Extension {
       return {
         title: info.title,
         cover: info.cover,
-        description: info.description,
-        episodes: [{ name: "Episodios", urls: eps }],
+        desc: info.description,
+        episodes: [{ title: "Episodios", urls: eps }],
       };
     }
 
@@ -146,7 +146,7 @@ export default class extends Extension {
       const langs = this.e69Langs(vh);
       if (langs.length) {
         const groups = langs.map((l) => ({
-          name: this.e69LangName(l),
+          title: this.e69LangName(l),
           urls: [
             {
               name: "Ver pelicula",
@@ -157,7 +157,7 @@ export default class extends Extension {
         return {
           title: info.title,
           cover: info.cover,
-          description: info.description,
+          desc: info.description,
           episodes: groups,
         };
       }
@@ -166,10 +166,10 @@ export default class extends Extension {
     return {
       title: info.title,
       cover: info.cover,
-      description: info.description,
+      desc: info.description,
       episodes: [
         {
-          name: "Ver",
+          title: "Ver",
           urls: [{ name: "Ver online", url: vid || url }],
         },
       ],
