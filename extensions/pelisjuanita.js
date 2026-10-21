@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis
-// @version      v0.1.5
+// @version      v0.1.6
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -272,8 +272,12 @@ export default class extends Extension {
     }
     if (!list.length) return this.err("Sin servidores disponibles");
 
+    const ordered = list
+      .slice()
+      .sort((a, b) => this.rankHost(a.url) - this.rankHost(b.url));
+
     const map = {};
-    for (const s of list) {
+    for (const s of ordered) {
       let label = s.name;
       let n = 2;
       while (map[label]) label = s.name + " #" + n++;
@@ -290,7 +294,6 @@ export default class extends Extension {
     const extra = { "X-Servers": JSON.stringify(map) };
     if (langLabel) extra["X-Language"] = langLabel;
 
-    const ordered = list.slice().sort((a, b) => this.rankHost(a.url) - this.rankHost(b.url));
     for (const s of ordered) {
       let r = null;
       try {
