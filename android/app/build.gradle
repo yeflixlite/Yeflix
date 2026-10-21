@@ -77,6 +77,7 @@ android {
             keyPassword _keyPassword
             v1SigningEnabled true
             v2SigningEnabled true
+            enableV3Signing true
         }
         debug {
             storeFile _storeFile
@@ -85,6 +86,7 @@ android {
             keyPassword _keyPassword
             v1SigningEnabled true
             v2SigningEnabled true
+            enableV3Signing true
         }
     }
     
