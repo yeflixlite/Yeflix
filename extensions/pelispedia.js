@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis Premium
-// @version      v0.1.3
+// @version      v0.1.4
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -839,31 +839,16 @@ export default class extends Extension {
     const segs = parsed.segs;
     if (!segs.length) return null;
 
-    const img = segs.filter((u) =>
-      /tiktokcdn|\.png(\?|$)|\.jpe?g(\?|$)|\.webp(\?|$)|[?&]x-expires=/i.test(u)
-    );
-    if (img.length * 2 >= segs.length) return null;
-
-    const seg = await this.swReq(
-      segs[0],
-      Object.assign({}, hdr, { "Range": "bytes=0-262143" }),
-      Math.max(3000, Math.min(ms || 5000, 6000))
-    );
-    if (typeof seg !== "string" || seg.length < 50000) return null;
-    const ts = seg.charCodeAt(0) === 0x47 || (seg.length > 188 && seg.charCodeAt(188) === 0x47);
-    const ftyp = seg.slice(4, 8) === "ftyp";
-    if (!ts && !ftyp) return null;
-
-    if (segs.length > 4) {
-      const mid = segs[Math.floor(segs.length / 2)];
-      const seg2 = await this.swReq(
-        mid,
-        Object.assign({}, hdr, { "Range": "bytes=0-65535" }),
-        4000
-      );
-      if (typeof seg2 !== "string" || seg2.length < 20000) return null;
-      if (seg2.charCodeAt(0) !== 0x47 && seg2.slice(4, 8) !== "ftyp") return null;
+    let img = 0;
+    let media = 0;
+    for (const u of segs) {
+      if (/tiktokcdn|\.png(\?|$)|\.jpe?g(\?|$)|\.webp(\?|$)|[?&]x-expires=|image\//i.test(u)) {
+        img++;
+      } else if (/\.ts(\?|$)|\.m4s(\?|$)|\.aac(\?|$)|\.mp4(\?|$)|\.txt(\?|$)/i.test(u) || !/\.(png|jpe?g|webp|gif|bmp|svg)/i.test(u)) {
+        media++;
+      }
     }
+    if (!media || img * 2 >= segs.length) return null;
 
     return Object.assign({}, c, { verified: true });
   }
