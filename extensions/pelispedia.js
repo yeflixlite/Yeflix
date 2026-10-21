@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis Premium
-// @version      v0.1.2
+// @version      v0.1.3
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -391,12 +391,12 @@ export default class extends Extension {
     for (const s of list) {
       let r = null;
       try {
-        r = await this.resolveEmbed(s.url, referer);
+        r = await this.limit(this.resolveEmbed(s.url, referer), 10000, null);
       } catch (_) {
         r = null;
       }
       if (!r || !r.url || String(r.url).startsWith("error://")) continue;
-      if (r.verified || (await this.probeStream(r))) {
+      if (r.verified || (await this.limit(this.probeStream(r), 9000, false))) {
         r.headers = Object.assign({}, r.headers || {}, {
           "X-Servers": JSON.stringify(headers),
           "X-Primary-Server": s.label,
@@ -420,21 +420,7 @@ export default class extends Extension {
     if (!r || !r.url || r.url.startsWith("error://")) return false;
     if (!/^https?:\/\//i.test(r.url)) return true;
     if (!/\.m3u8|master\.txt|playlist\.txt|\/hls\//i.test(r.url)) return true;
-    const get = this.request("", {
-      headers: Object.assign({ "Miru-Url": r.url }, r.headers || {}),
-    }).catch(() => "");
-    try {
-      const body =
-        typeof setTimeout === "function"
-          ? await Promise.race([
-              get,
-              new Promise((res) => setTimeout(() => res(""), 3500)),
-            ])
-          : await get;
-      return typeof body === "string" && body.indexOf("#EXTM3U") !== -1;
-    } catch (_) {
-      return false;
-    }
+    return !!(await this.swProbe(r, 5000));
   }
 
   hostInfo(u) {
@@ -730,7 +716,7 @@ export default class extends Extension {
     let m;
     while ((m = re.exec(block[1]))) links[m[1]] = m[2];
 
-    const keys = ["hls2", "hls4", "hls3"].concat(Object.keys(links));
+    const keys = ["hls3", "hls2", "hls4"].concat(Object.keys(links));
     const seen = {};
     for (const k of keys) {
       if (seen[k]) continue;
@@ -771,38 +757,123 @@ export default class extends Extension {
 
   swPick(cands) {
     if (!cands || !cands.length) return Promise.resolve(null);
-    if (cands.length === 1) return Promise.resolve(cands[0]);
-    // La ruta /stream/ del mirror suele ser el CDN directo: se prueba sola
-    // (~0.4s) y solo si falla se compite con hls2/hls3.
-    const quick = cands.filter((c) => /\/stream\//i.test(c.url));
-    if (quick.length) {
-      return this.swProbe(quick[0], 1600).then((r) => {
-        if (r) return r;
-        const rest = cands.filter((c) => c !== quick[0]);
-        return this.swFirst(rest.map((c) => this.swProbe(c))).then(
-          (x) => x || quick[0]
-        );
-      });
-    }
-    return this.swFirst(cands.map((c) => this.swProbe(c))).then(
-      (r) => r || cands[0]
+    const hls3 = cands.filter(
+      (c) => !/\/stream\//i.test(c.url) && !/premilkyway/i.test(c.url)
     );
+    const hls2 = cands.filter(
+      (c) => !/\/stream\//i.test(c.url) && /premilkyway/i.test(c.url)
+    );
+    const rest = cands.filter((c) => /\/stream\//i.test(c.url));
+    const step = (list) =>
+      this.swFirst(list.map((c) => this.swProbe(c, 6500)));
+    return step(hls3)
+      .then((r) => r || step(hls2))
+      .then((r) => r || step(rest))
+      .then((r) => r || null);
   }
 
-  swProbe(c, ms) {
+  swReq(url, headers, ms) {
     const req = this.request("", {
-      headers: Object.assign({ "Miru-Url": c.url }, c.headers || {}),
-    })
-      .then((body) =>
-        typeof body === "string" && body.indexOf("#EXTM3U") !== -1
-          ? Object.assign({}, c, { verified: true })
-          : null
-      )
-      .catch(() => null);
+      headers: Object.assign({ "Miru-Url": url }, headers || {}),
+    }).catch(() => "");
     if (typeof setTimeout !== "function") return req;
     return Promise.race([
       req,
-      new Promise((res) => setTimeout(() => res(null), ms || 4000)),
+      new Promise((res) => setTimeout(() => res(""), ms || 5000)),
+    ]);
+  }
+
+  absUrl(u, base) {
+    u = this.fix(u);
+    if (!u) return "";
+    if (/^https?:\/\//i.test(u)) return u;
+    const o = this.originOf(base) || "";
+    if (u.charAt(0) === "/") return o + u;
+    const b = String(base || "").split("#")[0].split("?")[0];
+    return o + b.slice(o.length, b.lastIndexOf("/") + 1) + u;
+  }
+
+  hlsParse(txt, base) {
+    const lines = String(txt || "").split(/\r?\n/);
+    const variants = [];
+    const segs = [];
+    if (String(txt || "").indexOf("#EXT-X-STREAM-INF") !== -1) {
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim().indexOf("#EXT-X-STREAM-INF") !== 0) continue;
+        for (let j = i + 1; j < lines.length; j++) {
+          const s = lines[j].trim();
+          if (!s) continue;
+          if (s.charAt(0) !== "#") {
+            const u = this.absUrl(s, base);
+            if (u && variants.indexOf(u) === -1) variants.push(u);
+            break;
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < lines.length; i++) {
+        const s = lines[i].trim();
+        if (!s || s.charAt(0) === "#") continue;
+        const u = this.absUrl(s, base);
+        if (u) segs.push(u);
+      }
+    }
+    return { variants: variants, segs: segs };
+  }
+
+  async swProbe(c, ms) {
+    if (!c || !c.url) return null;
+    const hdr = Object.assign({ "Accept": "*/*" }, c.headers || {});
+    const master = await this.swReq(c.url, hdr, ms || 5000);
+    if (typeof master !== "string" || master.indexOf("#EXTM3U") === -1) return null;
+
+    let vurl = c.url;
+    let body = master;
+    let parsed = this.hlsParse(master, c.url);
+    if (parsed.variants.length) {
+      vurl = parsed.variants[0];
+      body = await this.swReq(vurl, hdr, ms || 5000);
+      if (typeof body !== "string" || body.indexOf("#EXTM3U") === -1) return null;
+      parsed = this.hlsParse(body, vurl);
+    }
+    const segs = parsed.segs;
+    if (!segs.length) return null;
+
+    const img = segs.filter((u) =>
+      /tiktokcdn|\.png(\?|$)|\.jpe?g(\?|$)|\.webp(\?|$)|[?&]x-expires=/i.test(u)
+    );
+    if (img.length * 2 >= segs.length) return null;
+
+    const seg = await this.swReq(
+      segs[0],
+      Object.assign({}, hdr, { "Range": "bytes=0-262143" }),
+      Math.max(3000, Math.min(ms || 5000, 6000))
+    );
+    if (typeof seg !== "string" || seg.length < 50000) return null;
+    const ts = seg.charCodeAt(0) === 0x47 || (seg.length > 188 && seg.charCodeAt(188) === 0x47);
+    const ftyp = seg.slice(4, 8) === "ftyp";
+    if (!ts && !ftyp) return null;
+
+    if (segs.length > 4) {
+      const mid = segs[Math.floor(segs.length / 2)];
+      const seg2 = await this.swReq(
+        mid,
+        Object.assign({}, hdr, { "Range": "bytes=0-65535" }),
+        4000
+      );
+      if (typeof seg2 !== "string" || seg2.length < 20000) return null;
+      if (seg2.charCodeAt(0) !== 0x47 && seg2.slice(4, 8) !== "ftyp") return null;
+    }
+
+    return Object.assign({}, c, { verified: true });
+  }
+
+  limit(p, ms, fallback) {
+    const done = Promise.resolve(p).catch(() => fallback);
+    if (typeof setTimeout !== "function") return done;
+    return Promise.race([
+      done,
+      new Promise((res) => setTimeout(() => res(fallback), ms)),
     ]);
   }
 
@@ -850,42 +921,47 @@ export default class extends Extension {
       "vidhide.com",
     ]);
     const seen = {};
-    for (const h of hosts.slice(0, 4)) {
+    const list = [];
+    for (const h of hosts) {
       if (!h || seen[h]) continue;
       seen[h] = true;
-      const page = "https://" + h + "/v/" + id + search;
-      let html = "";
-      try {
-        html = await this.request("", {
-          headers: {
-            "Miru-Url": page,
-            "Referer": "https://google.com/",
-            "User-Agent": UA,
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-          },
-        });
-      } catch (_) {
-        html = "";
-      }
-      if (typeof html !== "string" || !html) continue;
-      if (
-        html.length < 2000 &&
-        (html.indexOf("Page is loading") !== -1 || html.indexOf("Redirecting") !== -1)
-      ) {
-        try {
-          html = await this.request("", {
-            headers: { "Miru-Url": page, "Referer": page, "User-Agent": UA },
-          });
-        } catch (_) {}
-      }
-      if (typeof html !== "string" || !html) continue;
-      if (html.indexOf("Just a moment") !== -1) continue;
-
-      const r = this.streamFromPage(html, "https://" + h);
-      if (r) return r;
+      list.push(h);
+      if (list.length >= 4) break;
     }
-    return null;
+    return this.swFirst(list.map((h) => this.vidhideHost(h, id, search)));
+  }
+
+  async vidhideHost(h, id, search) {
+    const page = "https://" + h + "/v/" + id + search;
+    let html = await this.limit(
+      this.request("", {
+        headers: {
+          "Miru-Url": page,
+          "Referer": "https://google.com/",
+          "User-Agent": UA,
+          "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+          "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        },
+      }),
+      4500,
+      ""
+    );
+    if (typeof html !== "string" || !html) return null;
+    if (
+      html.length < 2000 &&
+      (html.indexOf("Page is loading") !== -1 || html.indexOf("Redirecting") !== -1)
+    ) {
+      html = await this.limit(
+        this.request("", {
+          headers: { "Miru-Url": page, "Referer": page, "User-Agent": UA },
+        }),
+        4000,
+        ""
+      );
+    }
+    if (typeof html !== "string" || !html) return null;
+    if (html.indexOf("Just a moment") !== -1) return null;
+    return this.streamFromPage(html, "https://" + h);
   }
 
   streamFromPage(html, origin) {
