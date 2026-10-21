@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis
-// @version      v0.1.6
+// @version      v0.1.7
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -294,6 +294,7 @@ export default class extends Extension {
     const extra = { "X-Servers": JSON.stringify(map) };
     if (langLabel) extra["X-Language"] = langLabel;
 
+    let fallback = null;
     for (const s of ordered) {
       let r = null;
       try {
@@ -301,14 +302,42 @@ export default class extends Extension {
       } catch (_) {
         r = null;
       }
-      if (r && r.url) {
-        r.headers = Object.assign({}, r.headers, extra, {
-          "X-Primary-Server": s.label,
-        });
-        return r;
-      }
+      if (!r || !r.url) continue;
+      // El CDN de algunos mirrors responde 200 al resolver pero luego no
+      // entrega el HLS. Comprobamos el stream antes de elegirlo como primario.
+      const ok = await this.probeStream(r);
+      r.headers = Object.assign({}, r.headers, extra, {
+        "X-Primary-Server": s.label,
+      });
+      if (ok) return r;
+      if (!fallback) fallback = r;
     }
+    if (fallback) return fallback;
     return Object.assign(this.err("Ningun servidor resoluble"), { headers: extra });
+  }
+
+  async probeStream(r) {
+    if (!r || !r.url || r.url.startsWith("error://")) return false;
+    if (!/^https?:\/\//i.test(r.url)) return true;
+    const get = this.request("", {
+      headers: Object.assign({ "Miru-Url": r.url }, r.headers || {}),
+    }).catch(() => "");
+    try {
+      const body =
+        typeof setTimeout === "function"
+          ? await Promise.race([
+              get,
+              new Promise((res) => setTimeout(() => res(""), 7000)),
+            ])
+          : await get;
+      if (typeof body !== "string" || !body) return false;
+      if (/\.m3u8|master\.txt|playlist\.txt|\/hls\//i.test(r.url)) {
+        return body.indexOf("#EXTM3U") !== -1;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   langs(html) {

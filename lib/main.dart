@@ -60,7 +60,7 @@ void main(List<String> args) async {
     MiruLog.ensureInitialized();
     await ApplicationUtils.ensureInitialized();
     await MiruRequest.ensureInitialized();
-    ExtensionUtils.ensureInitialized();
+    await ExtensionUtils.ensureInitialized();
     MediaKit.ensureInitialized();
 
     if (!Platform.isAndroid) {
