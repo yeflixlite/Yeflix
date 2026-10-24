@@ -4,13 +4,13 @@ import 'package:get/get.dart';
 import 'package:jiruhub/models/extension.dart';
 import 'package:jiruhub/controllers/home_controller.dart';
 import 'package:jiruhub/controllers/main_controller.dart';
-import 'package:jiruhub/controllers/search_controller.dart';
 import 'package:jiruhub/views/widgets/home/home_favorites.dart';
 import 'package:jiruhub/views/widgets/home/home_recent.dart';
 import 'package:jiruhub/views/widgets/home/home_catalog.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/yeflix_style.dart';
 import 'package:jiruhub/views/widgets/platform_widget.dart';
+import 'package:jiruhub/views/widgets/home/home_hero_banner.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -28,83 +28,7 @@ class _HomePageState extends State<HomePage> {
     super.initState();
   }
 
-  Widget _searchBar() {
-    return InkWell(
-      onTap: () {
-        Get.put(SearchPageController());
-        Get.find<MainController>().changeTab(1);
-      },
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        height: 46,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.10),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withOpacity(0.12)),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.search_rounded, size: 20, color: Colors.white70),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                "home.search-hint".i18n,
-                style: const TextStyle(color: Colors.white70, fontSize: 13.5),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
-  Widget _header(BuildContext context) {
-    final top = MediaQuery.of(context).padding.top;
-    return Container(
-      padding: EdgeInsets.fromLTRB(16, top + 14, 16, 18),
-      decoration: const BoxDecoration(
-        gradient: YeflixStyle.headerGradient,
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const YeflixMark(size: 42),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "Yeflix",
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.3,
-                      height: 1,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    "home.tagline".i18n,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _searchBar(),
-        ],
-      ),
-    );
-  }
 
   Widget _emptyState() {
     return Padding(
@@ -169,7 +93,7 @@ class _HomePageState extends State<HomePage> {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.only(bottom: 28),
             children: [
-              _header(context),
+              const HomeHeroBanner(),
               const SizedBox(height: 18),
               if (hasRecent) ...[
                 HomeRecent(data: c.resents),
