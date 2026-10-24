@@ -10,6 +10,9 @@ import 'package:flutter_windows_webview/flutter_windows_webview.dart';
 import 'package:get/get.dart';
 import 'package:jiruhub/data/providers/tmdb_provider.dart';
 import 'package:jiruhub/models/index.dart';
+import 'package:jiruhub/models/download.dart';
+import 'package:jiruhub/data/services/download_service.dart';
+import 'package:jiruhub/services/source_provider.dart';
 import 'package:jiruhub/views/dialogs/tmdb_binding.dart';
 import 'package:jiruhub/controllers/home_controller.dart';
 import 'package:jiruhub/controllers/main_controller.dart';
@@ -513,6 +516,199 @@ class DetailPageController extends GetxController {
         }),
       ),
     );
+  }
+
+  // ------------------------------------------------------------------ descargas offline
+
+  /// Obtiene los servidores disponibles para un episodio (nombre -> embed URL)
+  /// a partir de la cabecera X-Servers de la extension.
+  Future<Map<String, String>> getEpisodeServers(String episodeUrl) async {
+    if (runtime.value == null) return {};
+    try {
+      final watchData = await runtime.value!.watch(episodeUrl) as ExtensionBangumiWatch;
+      final headers = watchData.headers ?? {};
+      final servers = <String, String>{};
+      if (headers.containsKey('X-Servers')) {
+        try {
+          final parsed = jsonDecode(headers['X-Servers']!);
+          if (parsed is Map) {
+            parsed.forEach((k, v) => servers[k.toString()] = v.toString());
+          }
+        } catch (_) {}
+      }
+      return servers;
+    } catch (e) {
+      error.value = e.toString();
+      return {};
+    }
+  }
+
+  /// Resuelve una fuente de descarga para un servidor dado.
+  Future<SourceResult> resolveDownloadSource(
+    String embedUrl,
+    String serverName,
+  ) async {
+    final lower = serverName.toLowerCase();
+    final offlineCompatible =
+        lower.contains('streamwish') ||
+        lower.contains('vidhide') ||
+        lower.contains('voe') ||
+        lower.contains('byse') ||
+        lower.contains('filemoon');
+    final provider = ExtensionSourceProvider(
+      serverName: serverName,
+      serverType: lower,
+      offlineCompatible: offlineCompatible,
+      resolveWatch: (u) async =>
+          (await runtime.value!.watch(u) as ExtensionBangumiWatch).toJson(),
+    );
+    return provider.resolve(embedUrl);
+  }
+
+  /// Inicia la descarga de un episodio o pelicula.
+  Future<void> startDownload({
+    required String episodeUrl,
+    required String serverName,
+    required String sourceUrl,
+    required String sourceType,
+    required bool isHls,
+    required Map<String, String>? headers,
+    required String quality,
+    String? qualityLabel,
+    String? episodeName,
+    int? episodeIndex,
+  }) async {
+    if (detail == null) return;
+    final isMovie = detail!.episodes == null || detail!.episodes!.isEmpty;
+    await Get.find<DownloadService>().startDownload(
+      package: package,
+      title: detail!.title,
+      contentType: isMovie ? DownloadContentType.movie : DownloadContentType.episode,
+      detailUrl: url,
+      episodeName: episodeName ?? (isMovie ? null : episodeUrl),
+      episodeIndex: episodeIndex,
+      serverName: serverName,
+      serverType: serverName.toLowerCase(),
+      sourceUrl: sourceUrl,
+      sourceType: sourceType,
+      isHls: isHls,
+      headers: headers,
+      quality: quality,
+      qualityLabel: qualityLabel,
+    );
+  }
+
+  // ------------------------------------------------------------------ flujo de descarga por episodio
+
+  /// Abre el selector de servidor e inicia la descarga de un episodio.
+  Future<void> downloadEpisode(
+    BuildContext context,
+    ExtensionEpisode episode, {
+    int? episodeIndex,
+  }) async {
+    if (runtime.value == null || detail == null) return;
+    final servers = await getEpisodeServers(episode.url);
+    if (servers.isEmpty) {
+      showPlatformSnackbar(
+        context: context,
+        content: 'offline.no-servers'.i18n,
+        severity: fluent.InfoBarSeverity.error,
+      );
+      return;
+    }
+
+    String? pickedName;
+    await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('offline.choose-server'.i18n),
+            ),
+            ...servers.keys.map((name) => ListTile(
+                  title: Text(name),
+                  onTap: () => Navigator.pop(ctx, name),
+                )),
+          ],
+        ),
+      ),
+    ).then((value) => pickedName = value);
+
+    final picked = pickedName;
+    if (picked == null) return;
+    final embedUrl = servers[picked]!;
+
+    final result = await resolveDownloadSource(embedUrl, picked);
+    if (!result.isPlayable) {
+      showPlatformSnackbar(
+        context: context,
+        content: result.errorReason ?? 'offline.source-unavailable'.i18n,
+        severity: fluent.InfoBarSeverity.error,
+      );
+      return;
+    }
+
+    final qualityLabel = result.qualities.isNotEmpty
+        ? result.qualities.first.label
+        : 'offline.quality-auto'.i18n;
+    final qualityUrl = result.qualities.isNotEmpty
+        ? result.qualities.first.url
+        : result.playbackUrl!;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('offline.confirm-download'.i18n),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(offlineServerLabel(picked)),
+            Text(
+              '${'offline.quality'.i18n}: $qualityLabel',
+              style: const TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('common.cancel'.i18n),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('offline.download'.i18n),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    await startDownload(
+      episodeUrl: episode.url,
+      serverName: picked,
+      sourceUrl: qualityUrl,
+      sourceType: result.sourceKind == SourceKind.hls ? 'hls' : 'mp4',
+      isHls: result.sourceKind == SourceKind.hls,
+      headers: result.headers,
+      quality: qualityLabel ?? 'offline.quality-auto'.i18n,
+      qualityLabel: qualityLabel,
+      episodeName: episode.name,
+      episodeIndex: episodeIndex,
+    );
+  }
+
+  String offlineServerLabel(String name) {
+    final lower = name.toLowerCase();
+    if (lower.contains('streamwish')) return 'offline.server-streamwish'.i18n;
+    if (lower.contains('vidhide')) return 'offline.server-vidhide'.i18n;
+    if (lower.contains('voe')) return 'offline.server-voe'.i18n;
+    return name;
   }
 
   @override

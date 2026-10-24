@@ -262,6 +262,35 @@ class _SettingsPageState extends State<SettingsPage> {
                 return JiruHubStorage.getSetting(SettingKey.videoPlayer);
               },
             ),
+            SettingsRadiosTile(
+              title: 'Calidad de descarga',
+              itemNameValue: const {
+                'Económica (480p - Menor peso)': 'low',
+                'Estándar (720p - Recomendada)': 'standard',
+                'Máxima (1080p - Mayor peso)': 'high',
+              },
+              buildSubtitle: () {
+                final q = (JiruHubStorage.getSetting(SettingKey.downloadQuality)
+                        as String?) ??
+                    'standard';
+                switch (q) {
+                  case 'low':
+                    return 'Económica (480p): Ahorra almacenamiento (~300-450 MB)';
+                  case 'high':
+                    return 'Máxima (1080p): Máxima resolución (~1.0-1.5 GB)';
+                  case 'standard':
+                  default:
+                    return 'Estándar (720p): Calidad óptima y descarga rápida (~500-700 MB)';
+                }
+              },
+              applyValue: (value) {
+                JiruHubStorage.setSetting(SettingKey.downloadQuality, value);
+              },
+              buildGroupValue: () {
+                return JiruHubStorage.getSetting(SettingKey.downloadQuality) ??
+                    'standard';
+              },
+            ),
             const SizedBox(height: 10),
             if (!Platform.isAndroid) ...[
               Text("settings.skip-interval".i18n),

@@ -22,6 +22,7 @@ import 'package:jiruhub/utils/yeflix_style.dart';
 import 'package:jiruhub/views/widgets/platform_widget.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:jiruhub/data/services/download_service.dart';
 
 void main(List<String> args) async {
   if (args.contains('-version') || args.contains('--version')) {
@@ -62,6 +63,7 @@ void main(List<String> args) async {
     await MiruRequest.ensureInitialized();
     await ExtensionUtils.ensureInitialized();
     MediaKit.ensureInitialized();
+    Get.put(DownloadService(), permanent: true);
 
     if (!Platform.isAndroid) {
       await windowManager.ensureInitialized();

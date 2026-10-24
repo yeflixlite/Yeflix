@@ -1,12 +1,12 @@
 buildscript {
-    ext.kotlin_version = '1.7.10'
+    ext.kotlin_version = '1.9.10'
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:7.2.0'
+        classpath 'com.android.tools.build:gradle:8.1.0'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
@@ -21,8 +21,27 @@ allprojects {
 rootProject.buildDir = '../build'
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "1.8"
+        }
+    }
 }
 subprojects {
+    if (project.name != 'app') {
+        afterEvaluate { evaluatedProject ->
+            def androidExtension = evaluatedProject.extensions.findByName('android')
+            if (androidExtension != null && androidExtension.namespace == null) {
+                androidExtension.namespace = evaluatedProject.group
+            }
+            if (androidExtension != null) {
+                def releaseBuildType = androidExtension.buildTypes.findByName('release')
+                if (releaseBuildType != null) {
+                    releaseBuildType.proguardFiles += rootProject.file('proguard-rules.pro')
+                }
+            }
+        }
+    }
     project.evaluationDependsOn(':app')
 }
 

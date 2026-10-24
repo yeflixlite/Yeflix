@@ -141,6 +141,7 @@ class JiruHubStorage {
     await _initSetting(SettingKey.subtitleBackgroundColor, Colors.black.value);
     await _initSetting(SettingKey.subtitleBackgroundOpacity, 0.5);
     await _initSetting(SettingKey.subtitleTextAlign, TextAlign.center.index);
+    await _initSetting(SettingKey.downloadQuality, 'standard');
   }
 
   static _initSetting(String key, dynamic value) async {
@@ -207,4 +208,5 @@ class SettingKey {
   static const subtitleTextAlign = "SubtitleTextAlign";
   static const subtitleLastLanguageSelected = "SubtitleLastLanguageSelected";
   static const subtitleLastTitleSelected = "SubtitleLastTitleSelected";
+  static const downloadQuality = "DownloadQuality";
 }

@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:jiruhub/utils/exo_player_controller.dart';
 import 'package:jiruhub/data/providers/anilist_provider.dart';
 import 'package:jiruhub/data/providers/bt_server_provider.dart';
 import 'package:jiruhub/models/index.dart';
@@ -44,7 +45,7 @@ class VideoPlayerController extends GetxController {
   final String detailUrl;
   final int playIndex;
   final int episodeGroupId;
-  final ExtensionService runtime;
+  final ExtensionService? runtime;
   final String anilistID;
 
   VideoPlayerController({
@@ -53,13 +54,40 @@ class VideoPlayerController extends GetxController {
     required this.detailUrl,
     required this.playIndex,
     required this.episodeGroupId,
-    required this.runtime,
+    this.runtime,
     required this.anilistID,
-  });
+    this.localFilePath,
+  }) {
+    exo = ExoPlayerNativeController(tag: title);
+  }
+
+  /// Ruta de archivo local para reproduccion offline. Cuando se establece,
+  /// [play] abre el archivo directamente sin consultar la extension.
+  final String? localFilePath;
 
   // 播放器
   final player = Player();
   late final videoController = VideoController(player);
+
+  /// Controlador nativo de ExoPlayer (solo Android).
+  late final ExoPlayerNativeController exo;
+
+  /// Indica si en esta plataforma se está usando ExoPlayer nativo (Android).
+  bool get isExoPlayerActive => Platform.isAndroid;
+
+  /// URL de fuente resuelta para ExoPlayer (Android).
+  final RxString exoSourceUrl = ''.obs;
+
+  /// Cabeceras autorizadas para la fuente de ExoPlayer.
+  final Rx<Map<String, String>> exoHeaders = Rx(<String, String>{});
+
+  // Estados de reproducción ExoPlayer (mirror para la UI).
+  final RxBool exoIsPlaying = false.obs;
+  final RxInt exoPlaybackState = 0.obs;
+  final RxBool exoLoading = false.obs;
+  final RxInt exoPositionMs = 0.obs;
+  final RxInt exoDurationMs = 0.obs;
+  Timer? _exoPositionTimer;
 
   final showSidebar = false.obs;
   final isOpenSidebar = false.obs;
@@ -74,7 +102,7 @@ class VideoPlayerController extends GetxController {
       }
       RouterUtils.pop();
     },
-    LogicalKeyboardKey.keyF: () => toggleFullscreen(),
+    LogicalKeyboardKey.keyF: () => this.toggleFullscreen(),
     LogicalKeyboardKey.mediaPlay: () => player.play(),
     LogicalKeyboardKey.mediaPause: () => player.pause(),
     LogicalKeyboardKey.mediaPlayPause: () => player.playOrPause(),
@@ -157,7 +185,6 @@ class VideoPlayerController extends GetxController {
   final serverFailedMessage = ''.obs;
   final currentLanguage = ''.obs;
 
-
   // 字幕配置
   final subtitleFontSize = 46.0.obs;
   final subtitleFontWeight = FontWeight.normal.obs;
@@ -199,6 +226,11 @@ class VideoPlayerController extends GetxController {
     }
     _initSettings();
     _initPlayer();
+    // Inicializa el controlador nativo de ExoPlayer (Android).
+    if (isExoPlayerActive) {
+      exo.init();
+      _bindExoStreams();
+    }
     // Configurar libmpv para evitar crashes en Linux:
     // - hwdec=no: evita error vaapi not supported by libswscale
     // - reconnect=0: evita SIGSEGV ~16s post-EHOSTUNREACH cuando
@@ -214,6 +246,201 @@ class VideoPlayerController extends GetxController {
     play();
 
     super.onInit();
+  }
+
+  /// Vincula los streams de eventos del reproductor nativo ExoPlayer.
+  void _bindExoStreams() {
+    exo.onError.listen((message) {
+      onExoError(message);
+    });
+    exo.onRenderedFirstFrame.listen((_) {
+      logger.info('ExoPlayer: primer frame renderizado en pantalla');
+      serverFailedMessage.value = '';
+      error.value = '';
+      isGettingWatchData.value = false;
+      isPlaying.value = true;
+      exoIsPlaying.value = true;
+    });
+    exo.onIsPlayingChanged.listen((playing) {
+      exoIsPlaying.value = playing;
+      isPlaying.value = playing;
+      if (playing) {
+        serverFailedMessage.value = '';
+        error.value = '';
+        isGettingWatchData.value = false;
+      }
+    });
+    exo.onStateChanged.listen((args) {
+      final playing = args['playWhenReady'] as bool? ?? false;
+      final state = args['playbackState'] as int? ?? 0;
+      final isPl = args['isPlaying'] as bool? ?? false;
+      exoIsPlaying.value = playing || isPl;
+      exoPlaybackState.value = state;
+      isPlaying.value = playing || isPl;
+      // Media3: STATE_IDLE = 1, STATE_BUFFERING = 2, STATE_READY = 3, STATE_ENDED = 4
+      if (state == 3 || isPl || (state == 2 && playing)) {
+        serverFailedMessage.value = '';
+        error.value = '';
+        isGettingWatchData.value = false;
+      }
+    });
+    exo.onLoadingChanged.listen((loading) {
+      exoLoading.value = loading;
+    });
+  }
+
+  /// Callback de error del reproductor nativo ExoPlayer.
+  void onExoError(String message) {
+    logger.severe('ExoPlayer error: $message');
+    exoLoading.value = false;
+    // Solo mostrar error si NO hay video reproduciéndose ni frame activo
+    if (!isPlaying.value && (position.value.inSeconds == 0)) {
+      error.value = 'ExoPlayer: $message';
+      serverFailedMessage.value = 'Error de reproducción: $message';
+      isPlaying.value = false;
+    }
+  }
+
+  /// Callback de cambio de estado del reproductor nativo ExoPlayer.
+  void onExoStateChanged(bool playing, int state) {
+    exoIsPlaying.value = playing;
+    isPlaying.value = playing;
+    // Media3: STATE_READY = 3
+    if (state == 3 || playing) {
+      serverFailedMessage.value = '';
+      error.value = '';
+      isGettingWatchData.value = false;
+    }
+  }
+
+  /// Callback de cambio de carga del reproductor nativo ExoPlayer.
+  void onExoLoadingChanged(bool loading) {
+    exoLoading.value = loading;
+  }
+
+  /// Abre una fuente en ExoPlayer nativo (Android).
+  Future<bool> playExo({
+    required String url,
+    Map<String, String>? headers,
+    int? positionMs,
+    String? mimeType,
+  }) async {
+    if (!isExoPlayerActive) return false;
+    exoSourceUrl.value = url;
+    if (headers != null) exoHeaders.value = headers;
+    exoLoading.value = true;
+    try {
+      await exo.setSource(
+        url: url,
+        headers: headers,
+        positionMs: positionMs,
+        mimeType: mimeType,
+      );
+      await exo.setPlayWhenReady(true);
+      isPlaying.value = true;
+      exoIsPlaying.value = true;
+      _startExoPositionTimer();
+      return true;
+    } catch (e) {
+      logger.severe('playExo error: $e');
+      onExoError(e.toString());
+      return false;
+    }
+  }
+
+  /// Pausa/ reanuda en ExoPlayer nativo.
+  Future<void> setExoPlayWhenReady(bool value) async {
+    if (!isExoPlayerActive) return;
+    await exo.setPlayWhenReady(value);
+    exoIsPlaying.value = value;
+    isPlaying.value = value;
+  }
+
+  /// Busca una posición en ExoPlayer nativo (ms).
+  Future<void> seekExoMs(int positionMs) async {
+    if (!isExoPlayerActive) return;
+    await exo.seekToMs(positionMs);
+    position.value = Duration(milliseconds: positionMs);
+  }
+
+  /// Inicia el temporizador de posición para ExoPlayer.
+  void _startExoPositionTimer() {
+    _exoPositionTimer?.cancel();
+    _exoPositionTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (_) async {
+      if (!isExoPlayerActive) return;
+      final pos = await exo.positionMs();
+      if (pos >= 0) {
+        exoPositionMs.value = pos;
+        position.value = Duration(milliseconds: pos);
+        if (pos > 0) {
+          // Si la posición ya avanzó, el video se está reproduciendo con éxito
+          if (serverFailedMessage.value.isNotEmpty) serverFailedMessage.value = '';
+          if (error.value.isNotEmpty) error.value = '';
+          if (isGettingWatchData.value) isGettingWatchData.value = false;
+        }
+      }
+      final dur = await exo.durationMs();
+      if (dur > 0) {
+        exoDurationMs.value = dur;
+        duration.value = Duration(milliseconds: dur);
+      }
+      final playing = await exo.isPlaying();
+      exoIsPlaying.value = playing;
+      isPlaying.value = playing;
+      if (playing) {
+        if (serverFailedMessage.value.isNotEmpty) serverFailedMessage.value = '';
+        if (error.value.isNotEmpty) error.value = '';
+        if (isGettingWatchData.value) isGettingWatchData.value = false;
+      }
+    });
+  }
+
+  @override
+  void onClose() async {
+    _exoPositionTimer?.cancel();
+    if (isExoPlayerActive) {
+      await exo.dispose();
+    }
+    if (JiruHubStorage.getSetting(SettingKey.autoTracking) && anilistID != "") {
+      AniListProvider.editList(
+        status: AnilistMediaListStatus.current,
+        progress: playIndex + 1,
+        mediaId: anilistID,
+      );
+    }
+    if (Platform.isAndroid) {
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.edgeToEdge,
+      );
+      // 如果是平板则不改变
+      // 切换回竖屏
+      if (!LayoutUtils.isTablet) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]);
+      }
+    }
+    _dlnaTimer?.cancel();
+    try {
+      player.pause();
+    } catch (_) {}
+    try {
+      await player.stop();
+      // Dar tiempo a libmpv para liquidar su estado antes de dispose
+      await Future.delayed(const Duration(milliseconds: 400));
+    } catch (_) {}
+    try {
+      await _saveHistory();
+    } catch (_) {}
+    try {
+      player.dispose();
+    } catch (e) {
+      logger.severe('player.dispose error: $e');
+    }
+    logger.info('dispose video controller');
+    super.onClose();
   }
 
   _initSettings() {
@@ -327,7 +554,7 @@ class VideoPlayerController extends GetxController {
 
       // 获取上次播放进度
       final history = await DatabaseService.getHistoryByPackageAndUrl(
-        runtime.extension.package,
+        runtime?.extension.package ?? 'local',
         detailUrl,
       );
 
@@ -386,6 +613,11 @@ class VideoPlayerController extends GetxController {
         return;
       }
       isPlaying.value = event;
+      if (event) {
+        serverFailedMessage.value = '';
+        error.value = '';
+        isGettingWatchData.value = false;
+      }
     });
 
     // 监听进度
@@ -394,6 +626,11 @@ class VideoPlayerController extends GetxController {
         return;
       }
       position.value = event;
+      if (event.inSeconds > 0) {
+        serverFailedMessage.value = '';
+        error.value = '';
+        isGettingWatchData.value = false;
+      }
     });
 
     // 错误监听 — detectar fallo de reproducción
@@ -412,7 +649,8 @@ class VideoPlayerController extends GetxController {
                 'Servidor "${currentServerName.value}" no disponible.\n'
                 'Cambia de servidor con el botón Servidor.';
           } else {
-            serverFailedMessage.value = 'Error de reproducción. Intenta más tarde.';
+            serverFailedMessage.value =
+                'Error de reproducción. Intenta más tarde.';
           }
         }
       }
@@ -421,17 +659,57 @@ class VideoPlayerController extends GetxController {
 
   // 播放
   play() async {
-    // 如果已经 delete 当前 controller
+    // Si el controlador ya fue delete, no hacer nada.
     if (!Get.isRegistered<VideoPlayerController>(tag: title)) {
       return;
     }
     player.stop();
     isGettingWatchData.value = true;
+    error.value = '';
+    serverFailedMessage.value = '';
+
+    // Reproduccion de archivo local (offline): se abre directamente con
+    // ExoPlayer en Android o media_kit en desktop, sin consultar extension ni red.
+    if (localFilePath != null && localFilePath!.isNotEmpty) {
+      try {
+        if (isExoPlayerActive) {
+          await playExo(url: localFilePath!);
+        } else {
+          await player.open(Media(localFilePath!));
+        }
+        isGettingWatchData.value = false;
+        return;
+      } catch (e) {
+        logger.severe('local file open error: $e');
+        error.value = e.toString();
+        serverFailedMessage.value = 'Error al abrir archivo local: $e';
+        isGettingWatchData.value = false;
+        if (!isExoPlayerActive) await _safePlayerInit();
+        return;
+      }
+    }
+
+    if (runtime == null) {
+      error.value = 'No se encontró la extensión para cargar este video.';
+      serverFailedMessage.value = error.value;
+      isGettingWatchData.value = false;
+      return;
+    }
+
     try {
       await getWatchData();
     } catch (e) {
       logger.severe(e);
       error.value = e.toString();
+      serverFailedMessage.value = 'Error al obtener fuentes: $e';
+      isGettingWatchData.value = false;
+      return;
+    }
+
+    if (watchData == null) {
+      error.value = 'No se encontraron datos de reproducción.';
+      serverFailedMessage.value = error.value;
+      isGettingWatchData.value = false;
       return;
     }
 
@@ -454,16 +732,20 @@ class VideoPlayerController extends GetxController {
           final primaryUrl = watchData!.url;
           unawaited(getQuality());
 
-          logger.info('Intentando servidor primario: ${currentServerName.value} → $primaryUrl');
-          bool worked = await _tryOpenPlayer(primaryUrl, watchData!.headers);
+          logger.info(
+              'Intentando servidor primario: ${currentServerName.value} → $primaryUrl');
+          bool worked = await _openStream(primaryUrl, watchData!.headers);
 
-          if (!worked && watchData!.headers != null && watchData!.headers!.containsKey('X-Netu-Alts')) {
+          if (!worked &&
+              watchData!.headers != null &&
+              watchData!.headers!.containsKey('X-Netu-Alts')) {
             try {
-              final List<dynamic> alts = jsonDecode(watchData!.headers!['X-Netu-Alts']!);
+              final List<dynamic> alts =
+                  jsonDecode(watchData!.headers!['X-Netu-Alts']!);
               for (final altUrlDyn in alts) {
                 final altUrl = altUrlDyn.toString();
                 logger.info('Intentando URL alternativa: $altUrl');
-                worked = await _tryOpenPlayer(altUrl, watchData!.headers);
+                worked = await _openStream(altUrl, watchData!.headers);
                 if (worked) {
                   watchData = ExtensionBangumiWatch(
                     type: watchData!.type,
@@ -481,12 +763,15 @@ class VideoPlayerController extends GetxController {
           }
 
           if (!worked) {
-            logger.severe('Servidor primario fallido: ${currentServerName.value}');
+            logger.severe(
+                'Servidor primario fallido: ${currentServerName.value}');
             // Auto-failover: iterar servidores alternativos
             bool foundWorking = false;
             final serverEntries = availableServers.entries.toList();
-            final serverErrors = <String, String>{}; // Para registrar errores por servidor
-            logger.info('Servidores disponibles para failover: ${serverEntries.map((e) => e.key).toList()}');
+            final serverErrors =
+                <String, String>{}; // Para registrar errores por servidor
+            logger.info(
+                'Servidores disponibles para failover: ${serverEntries.map((e) => e.key).toList()}');
             for (final entry in serverEntries) {
               if (entry.key == currentServerName.value) continue;
               try {
@@ -494,25 +779,32 @@ class VideoPlayerController extends GetxController {
                 serverFailedMessage.value =
                     'Servidor "${currentServerName.value}" no disponible, '
                     'probando "${entry.key}"...';
-                var alt = await runtime.watch(entry.value)
-                    as ExtensionBangumiWatch;
+                final rawAlt = await runtime!.watch(entry.value);
+                if (rawAlt == null) continue;
+                var alt = rawAlt as ExtensionBangumiWatch;
                 logger.info('Failover ${entry.key} URL: ${alt.url}');
                 if (alt.url.startsWith('error://')) {
                   final errorMsg = alt.url.replaceFirst('error://', '');
-                  logger.severe('Failover ${entry.key}: error de extracción ($errorMsg)');
+                  logger.severe(
+                      'Failover ${entry.key}: error de extracción ($errorMsg)');
                   serverErrors[entry.key] = errorMsg;
                   continue;
                 }
-                
-                bool altWorked = await _tryOpenPlayer(alt.url, alt.headers);
-                
-                if (!altWorked && alt.headers != null && alt.headers!.containsKey('X-Netu-Alts')) {
+
+                bool altWorked = await _openStream(alt.url, alt.headers);
+
+                if (!altWorked &&
+                    alt.headers != null &&
+                    alt.headers!.containsKey('X-Netu-Alts')) {
                   try {
-                    final List<dynamic> alts = jsonDecode(alt.headers!['X-Netu-Alts']!);
+                    final List<dynamic> alts =
+                        jsonDecode(alt.headers!['X-Netu-Alts']!);
                     for (final altUrlDyn in alts) {
                       final altUrlStr = altUrlDyn.toString();
-                      logger.info('Failover probando alternativa: $altUrlStr');
-                      altWorked = await _tryOpenPlayer(altUrlStr, alt.headers);
+                      logger
+                          .info('Failover probando alternativa: $altUrlStr');
+                      altWorked =
+                          await _openStream(altUrlStr, alt.headers);
                       if (altWorked) {
                         alt = ExtensionBangumiWatch(
                           type: alt.type,
@@ -525,19 +817,22 @@ class VideoPlayerController extends GetxController {
                       }
                     }
                   } catch (e) {
-                    logger.warning('Error parseando X-Netu-Alts en failover: $e');
+                    logger.warning(
+                        'Error parseando X-Netu-Alts en failover: $e');
                   }
                 }
 
                 if (!altWorked) {
-                  logger.severe('Failover ${entry.key}: no se pudo conectar a ningún host');
+                  logger.severe(
+                      'Failover ${entry.key}: no se pudo conectar a ningún host');
                   continue;
                 }
-                
+
                 // Servidor alternativo alcanzable — usarlo
                 currentServerName.value = entry.key;
                 watchData = alt;
                 serverFailedMessage.value = '';
+                error.value = '';
                 logger.info('Failover exitoso: ${entry.key}');
                 foundWorking = true;
                 break;
@@ -547,37 +842,45 @@ class VideoPlayerController extends GetxController {
               }
             }
             if (!foundWorking) {
-              final errorDetails = serverErrors.entries.map((e) => '${e.key}: ${e.value}').join(', ');
-              logger.severe('Todos los servidores fallaron. Errores: $errorDetails');
+              final errorDetails = serverErrors.entries
+                  .map((e) => '${e.key}: ${e.value}')
+                  .join(', ');
+              logger.severe(
+                  'Todos los servidores fallaron. Errores: $errorDetails');
               serverFailedMessage.value =
                   'Ningún servidor disponible desde tu red.\n'
-                  'Errores: $errorDetails\n'
-                  'Prueba con una VPN o elige otro episodio.';
-              logger.severe('Todos los servidores fallaron, iniciando _safePlayerInit');
-              await _safePlayerInit();
+                  '${errorDetails.isNotEmpty ? 'Errores: $errorDetails\n' : ''}'
+                  'Cambia de servidor o intenta más tarde.';
+              error.value = serverFailedMessage.value;
+              logger.severe('Todos los servidores fallaron');
+              if (!isExoPlayerActive) await _safePlayerInit();
               isGettingWatchData.value = false;
               return;
             }
           }
-          if (watchData!.audioTrack != null) {
+          isGettingWatchData.value = false;
+          serverFailedMessage.value = '';
+          error.value = '';
+          if (watchData?.audioTrack != null) {
             await player.setAudioTrack(
               AudioTrack.uri(watchData!.audioTrack!),
             );
           }
         }
-
       }
       isGettingWatchData.value = false;
       // 添加来自扩展的字幕
-      subtitles.addAll(
-        (watchData!.subtitles ?? []).map(
-          (e) => SubtitleTrack.uri(
-            e.url,
-            language: e.language,
-            title: e.title,
+      if (watchData != null && watchData!.subtitles != null) {
+        subtitles.addAll(
+          watchData!.subtitles!.map(
+            (e) => SubtitleTrack.uri(
+              e.url,
+              language: e.language,
+              title: e.title,
+            ),
           ),
-        ),
-      );
+        );
+      }
       player.setSubtitleTrack(SubtitleTrack.no());
     } on StartServerException catch (_) {
       // 如果是 启动 bt server 失败
@@ -598,13 +901,15 @@ class VideoPlayerController extends GetxController {
       play();
       return;
     } catch (e) {
+      isGettingWatchData.value = false;
+      error.value = e.toString();
+      serverFailedMessage.value = e.toString();
       sendMessage(
         Message(
           Text(e.toString()),
           time: const Duration(seconds: 5),
         ),
       );
-      rethrow;
     }
   }
 
@@ -616,9 +921,13 @@ class VideoPlayerController extends GetxController {
     serverReferers.clear();
     serverFailedMessage.value = '';
     final playUrl = playList[index.value].url;
-    watchData = await runtime.watch(playUrl) as ExtensionBangumiWatch;
+    final res = await runtime!.watch(playUrl);
+    if (res == null) {
+      throw 'No se pudo obtener información del video.';
+    }
+    watchData = res as ExtensionBangumiWatch;
 
-    final headers = watchData!.headers;
+    final headers = watchData?.headers;
     if (headers != null) {
       // Parsear lista de servidores (embed URLs crudos)
       if (headers.containsKey('X-Servers')) {
@@ -633,8 +942,8 @@ class VideoPlayerController extends GetxController {
         try {
           final Map<String, dynamic> parsed =
               jsonDecode(headers['X-Server-Referers']!);
-          serverReferers.addAll(
-              parsed.map((k, v) => MapEntry(k, v.toString())));
+          serverReferers
+              .addAll(parsed.map((k, v) => MapEntry(k, v.toString())));
         } catch (_) {}
       }
       // Servidor actual
@@ -652,15 +961,18 @@ class VideoPlayerController extends GetxController {
 
   // Cambia al servidor — extrae su stream URL on-demand llamando watch(embedUrl)
   switchServer(String name) async {
-    if (!availableServers.containsKey(name)) return;
+    if (!availableServers.containsKey(name) || runtime == null) return;
     serverFailedMessage.value = '';
+    error.value = '';
     isGettingWatchData.value = true;
 
     final embedUrl = availableServers[name]!;
     ExtensionBangumiWatch newWatch;
     try {
       // Mode 2: la extensión detecta que es un embed URL y extrae directamente
-      newWatch = await runtime.watch(embedUrl) as ExtensionBangumiWatch;
+      final res = await runtime!.watch(embedUrl);
+      if (res == null) throw 'Servidor no disponible';
+      newWatch = res as ExtensionBangumiWatch;
     } catch (e) {
       logger.severe(e);
       serverFailedMessage.value =
@@ -670,8 +982,9 @@ class VideoPlayerController extends GetxController {
     }
 
     if (newWatch.url.startsWith('error://')) {
+      final msg = newWatch.url.replaceFirst('error://', '');
       serverFailedMessage.value =
-          'Servidor "$name" no disponible. Intenta otro.';
+          'Servidor "$name" no disponible: $msg. Intenta otro.';
       isGettingWatchData.value = false;
       return;
     }
@@ -681,17 +994,28 @@ class VideoPlayerController extends GetxController {
     final headers = <String, String>{};
     final referer = newWatch.headers?['Referer'] ?? serverReferers[name];
     if (referer != null) headers['Referer'] = referer;
+    if (newWatch.headers != null) {
+      headers.addAll(newWatch.headers!);
+    }
 
     watchData = ExtensionBangumiWatch(
-      type: watchData!.type,
+      type: newWatch.type,
       url: newWatch.url,
+      subtitles: newWatch.subtitles ?? watchData?.subtitles,
       headers: headers.isEmpty ? null : headers,
+      audioTrack: newWatch.audioTrack ?? watchData?.audioTrack,
     );
     _isAutoSeekPosition = true;
+
+    final worked = await _openStream(newWatch.url, watchData?.headers);
+    if (!worked) {
+      serverFailedMessage.value =
+          'No se pudo conectar al servidor "$name". Intenta otro.';
+    } else {
+      serverFailedMessage.value = '';
+      error.value = '';
+    }
     isGettingWatchData.value = false;
-    await player.open(
-      Media(newWatch.url, httpHeaders: watchData!.headers),
-    );
   }
 
   // 获取 torrent 媒体文件
@@ -762,7 +1086,8 @@ class VideoPlayerController extends GetxController {
         }
       } else {
         // HTTP 4xx/5xx: puede que libmpv lo reproduzca igual (Range headers)
-        logger.info('getQuality HTTP error ${e.response?.statusCode}, continuing');
+        logger.info(
+            'getQuality HTTP error ${e.response?.statusCode}, continuing');
       }
       return;
     } catch (e) {
@@ -846,18 +1171,28 @@ class VideoPlayerController extends GetxController {
 
   // 切换画质
   switchQuality(String qualityUrl) async {
-    final currentSecond = player.state.position.inSeconds;
-    final headers = watchData!.headers;
-    await player.open(
-      Media(qualityUrl, httpHeaders: headers),
-    );
-    //跳轉到切換之前的時間
-    Timer.periodic(const Duration(seconds: 1), (timer) {
-      player.seek(Duration(seconds: currentSecond));
-      if (player.state.position.inSeconds == currentSecond) {
-        timer.cancel();
-      }
-    });
+    final currentMs = isExoPlayerActive
+        ? exoPositionMs.value
+        : player.state.position.inMilliseconds;
+    final headers = watchData?.headers;
+    if (isExoPlayerActive) {
+      await playExo(
+        url: qualityUrl,
+        headers: headers,
+        positionMs: currentMs,
+      );
+    } else {
+      await player.open(
+        Media(qualityUrl, httpHeaders: headers),
+      );
+      final currentSecond = currentMs ~/ 1000;
+      Timer.periodic(const Duration(seconds: 1), (timer) {
+        player.seek(Duration(seconds: currentSecond));
+        if (player.state.position.inSeconds == currentSecond) {
+          timer.cancel();
+        }
+      });
+    }
   }
 
   // 设置字幕
@@ -903,13 +1238,13 @@ class VideoPlayerController extends GetxController {
         ..url = detailUrl
         ..cover = file.path
         ..episodeGroupId = episodeGroupId
-        ..package = runtime.extension.package
-        ..type = runtime.extension.type
+        ..package = runtime?.extension.package ?? 'local'
+        ..type = runtime?.extension.type ?? ExtensionType.bangumi
         ..episodeId = index.value
         ..episodeTitle = epName
         ..title = title
-        ..progress = player.state.position.inSeconds.toString()
-        ..totalProgress = player.state.duration.inSeconds.toString(),
+        ..progress = position.value.inSeconds.toString()
+        ..totalProgress = duration.value.inSeconds.toString(),
     );
     await Get.find<HomePageController>().onRefresh();
   }
@@ -1052,13 +1387,87 @@ class VideoPlayerController extends GetxController {
     }
   }
 
+  // Intenta abrir el stream con ExoPlayer (Android).
+  Future<bool> _tryOpenExo(String url, Map<String, String>? headers) async {
+    if (url.startsWith('error://')) {
+      logger.severe('URL de error recibida: $url');
+      return false;
+    }
+    final started = await playExo(url: url, headers: headers);
+    if (!started) return false;
+
+    final completer = Completer<bool>();
+    final subs = <StreamSubscription>[];
+    void finish(bool ok) {
+      if (!completer.isCompleted) completer.complete(ok);
+    }
+
+    subs.add(exo.onRenderedFirstFrame.listen((_) {
+      logger.info('_tryOpenExo: primer frame renderizado -> OK');
+      finish(true);
+    }));
+
+    subs.add(exo.onIsPlayingChanged.listen((isPlaying) {
+      if (isPlaying) {
+        logger.info('_tryOpenExo: onIsPlayingChanged(true) -> OK');
+        finish(true);
+      }
+    }));
+
+    subs.add(exo.onStateChanged.listen((args) {
+      final state = args['playbackState'] as int? ?? 0;
+      final playing = args['playWhenReady'] == true;
+      final isPl = args['isPlaying'] as bool? ?? false;
+      // Media3: STATE_IDLE = 1, STATE_BUFFERING = 2, STATE_READY = 3, STATE_ENDED = 4
+      if (state == 3 || isPl || (state == 2 && playing)) {
+        logger.info(
+            '_tryOpenExo: state=$state playing=$playing isPl=$isPl -> OK');
+        finish(true);
+      }
+    }));
+    subs.add(exo.onError.listen((err) {
+      logger.severe('_tryOpenExo error: $err');
+      finish(false);
+    }));
+
+    var ok = await completer.future.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => false,
+    );
+
+    // Si hubo timeout pero ExoPlayer ya está activo o con posición > 0
+    if (!ok &&
+        (isPlaying.value || exoPositionMs.value > 0 || exoIsPlaying.value)) {
+      logger.info(
+          '_tryOpenExo: timeout pero ya hay progreso/reproducción -> OK');
+      ok = true;
+    }
+
+    for (final sub in subs) {
+      await sub.cancel();
+    }
+
+    if (ok) {
+      error.value = '';
+      serverFailedMessage.value = '';
+      isGettingWatchData.value = false;
+    }
+
+    return ok;
+  }
+
+  // Abre el stream en el motor adecuado (ExoPlayer en Android, mpv en otras plataformas).
+  Future<bool> _openStream(String url, Map<String, String>? headers) async {
+    if (isExoPlayerActive) {
+      return await _tryOpenExo(url, headers);
+    } else {
+      return await _tryOpenPlayer(url, headers);
+    }
+  }
+
   // Intenta abrir el player con la URL dada.
   // Retorna true solo si el stream REALMENTE empieza a reproducirse.
-  // Antes se devolvía true en cuanto se llamaba a player.open(); si la URL
-  // conectaba por TCP pero respondía 403/timeout, nunca se hacía failover y
-  // el usuario veía un error de libmpv sin salida.
-  Future<bool> _tryOpenPlayer(
-      String url, Map<String, String>? headers) async {
+  Future<bool> _tryOpenPlayer(String url, Map<String, String>? headers) async {
     if (url.startsWith('error://')) {
       logger.severe('URL de error recibida: $url');
       return false;
@@ -1086,17 +1495,29 @@ class VideoPlayerController extends GetxController {
     subs.add(player.stream.duration.listen((d) {
       if (d > const Duration(seconds: 1)) finish(true);
     }));
+    subs.add(player.stream.position.listen((p) {
+      if (p.inSeconds > 0) finish(true);
+    }));
     subs.add(player.stream.error.listen((_) => finish(false)));
 
-    final ok = await completer.future.timeout(
-      const Duration(seconds: 10),
+    var ok = await completer.future.timeout(
+      const Duration(seconds: 5),
       onTimeout: () => false,
     );
+
+    if (!ok && (isPlaying.value || position.value.inSeconds > 0)) {
+      ok = true;
+    }
+
     for (final sub in subs) {
       await sub.cancel();
     }
 
-    if (!ok) {
+    if (ok) {
+      error.value = '';
+      serverFailedMessage.value = '';
+      isGettingWatchData.value = false;
+    } else {
       logger.severe('El stream no arrancó: $url');
       try {
         await player.stop();
@@ -1106,23 +1527,14 @@ class VideoPlayerController extends GetxController {
   }
 
   // Inicializa mpv con una fuente local de video negro (sin red).
-  // REQUERIDO antes de que el usuario navegue atrás cuando player.open()
-  // nunca fue llamado: sin esto, mpv_render_context_free (video_output_dispose)
-  // crashea con SIGSEGV porque el pipeline de render nunca procesó frames.
   Future<void> _safePlayerInit() async {
     try {
-      // av://lavfi:color genera frames localmente sin red — siempre disponible
-      // play:false evita que mpv empiece a reproducir (wakelock=1)
       await player.open(
         Media('av://lavfi:color=black:size=2x2:rate=1'),
         play: false,
       );
-      // Esperar a que mpv procese el open antes de stop()
       await Future.delayed(const Duration(milliseconds: 300));
       await player.stop();
-      // Esperar a que el stop complete (estado 'idle') antes de retornar
-      // Si retornamos muy rápido y el usuario navega atrás, video_output_dispose
-      // puede correr mientras el stop aún está en progreso → crash
       await Future.delayed(const Duration(milliseconds: 500));
       logger.info('_safePlayerInit completado');
     } catch (e) {
@@ -1136,6 +1548,11 @@ class VideoPlayerController extends GetxController {
 
   // 播放器相关操作
   playOrPause() async {
+    if (isExoPlayerActive) {
+      final willPlay = !isPlaying.value;
+      await setExoPlayWhenReady(willPlay);
+      return;
+    }
     if (dlnaDevice.value == null) {
       player.playOrPause();
       return;
@@ -1148,6 +1565,10 @@ class VideoPlayerController extends GetxController {
   }
 
   seek(Duration duration) async {
+    if (isExoPlayerActive) {
+      await seekExoMs(duration.inMilliseconds);
+      return;
+    }
     if (dlnaDevice.value == null) {
       player.seek(duration);
       return;
@@ -1155,47 +1576,6 @@ class VideoPlayerController extends GetxController {
     final curr = await dlnaDevice.value!.position();
     final diff = duration - position.value;
     await dlnaDevice.value!.seekByCurrent(curr, diff.inSeconds);
-  }
-
-  @override
-  void onClose() async {
-    if (JiruHubStorage.getSetting(SettingKey.autoTracking) && anilistID != "") {
-      AniListProvider.editList(
-        status: AnilistMediaListStatus.current,
-        progress: playIndex + 1,
-        mediaId: anilistID,
-      );
-    }
-    if (Platform.isAndroid) {
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.edgeToEdge,
-      );
-      // 如果是平板则不改变
-      // 切换回竖屏
-      if (!LayoutUtils.isTablet) {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.portraitDown,
-        ]);
-      }
-    }
-    _dlnaTimer?.cancel();
-    try { player.pause(); } catch (_) {}
-    try {
-      await player.stop();
-      // Dar tiempo a libmpv para liquidar su estado antes de dispose
-      await Future.delayed(const Duration(milliseconds: 400));
-    } catch (_) {}
-    try {
-      await _saveHistory();
-    } catch (_) {}
-    try {
-      player.dispose();
-    } catch (e) {
-      logger.severe('player.dispose error: $e');
-    }
-    logger.info('dispose video controller');
-    super.onClose();
   }
 }
 

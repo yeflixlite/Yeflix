@@ -114,7 +114,10 @@ class _VideoPlayerDesktopControlsState
                 child: SizedBox.expand(
                   child: Center(
                     child: Obx(() {
-                      if (_c.error.value.isNotEmpty) {
+                      final isPlayingVideo = _c.isPlaying.value ||
+                          _c.position.value.inSeconds > 0 ||
+                          (_c.exoIsPlaying.value);
+                      if (_c.error.value.isNotEmpty && !isPlayingVideo) {
                         return Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -167,7 +170,7 @@ class _VideoPlayerDesktopControlsState
                           ],
                         );
                       }
-                      if (!_c.isGettingWatchData.value) {
+                      if (!_c.isGettingWatchData.value || isPlayingVideo) {
                         return StreamBuilder(
                           stream: _c.player.stream.buffering,
                           builder: (context, snapshot) {
@@ -183,7 +186,7 @@ class _VideoPlayerDesktopControlsState
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (_c.runtime.extension.icon != null)
+                            if (_c.runtime?.extension.icon != null)
                               Container(
                                 decoration: const BoxDecoration(
                                   shape: BoxShape.circle,
@@ -191,7 +194,7 @@ class _VideoPlayerDesktopControlsState
                                 clipBehavior: Clip.antiAlias,
                                 margin: const EdgeInsets.only(right: 10),
                                 child: CacheNetWorkImagePic(
-                                  _c.runtime.extension.icon!,
+                                  _c.runtime!.extension.icon!,
                                   width: 30,
                                   height: 30,
                                 ),
@@ -201,7 +204,7 @@ class _VideoPlayerDesktopControlsState
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  _c.runtime.extension.name,
+                                  _c.runtime?.extension.name ?? 'Yeflix',
                                   style: const TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,

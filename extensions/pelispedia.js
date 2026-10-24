@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis Premium
-// @version      v0.1.4
+// @version      v0.1.6
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -341,13 +341,14 @@ export default class extends Extension {
   async watch(u) {
     const raw = this.siteUrl(u);
     if (!raw) return this.err("URL vacia");
+    this._lastResolveError = "";
 
     if (this.hostInfo(raw) && !/pelispedia\./i.test(raw)) {
       const direct = await this.resolveEmbed(raw, SITE + "/");
       if (direct && direct.url && !String(direct.url).startsWith("error://")) {
-        if (direct.verified || (await this.probeStream(direct))) return direct;
+        return direct;
       }
-      return this.err("Servidor no resoluble");
+      return this.err(this._lastResolveError || "Servidor no resoluble");
     }
 
     let vid = raw;
@@ -388,39 +389,37 @@ export default class extends Extension {
     const headers = {};
     for (const s of list) headers[s.label] = s.url;
 
+    const failures = [];
     for (const s of list) {
       let r = null;
       try {
-        r = await this.limit(this.resolveEmbed(s.url, referer), 10000, null);
+        r = await this.limit(this.resolveEmbed(s.url, referer), 3500, null);
       } catch (_) {
         r = null;
       }
-      if (!r || !r.url || String(r.url).startsWith("error://")) continue;
-      if (r.verified || (await this.limit(this.probeStream(r), 9000, false))) {
-        r.headers = Object.assign({}, r.headers || {}, {
-          "X-Servers": JSON.stringify(headers),
-          "X-Primary-Server": s.label,
-          "X-Language": this.e69LangName(g.lang),
-        });
-        return r;
+      if (!r || !r.url || String(r.url).startsWith("error://")) {
+        if (this._lastResolveError) {
+          failures.push(s.label + ": " + this._lastResolveError);
+        }
+        continue;
       }
+      r.headers = Object.assign({}, r.headers || {}, {
+        "X-Servers": JSON.stringify(headers),
+        "X-Primary-Server": s.label,
+        "X-Language": this.e69LangName(g.lang),
+      });
+      return r;
     }
 
+    const detail = failures.slice(0, 2).join(" | ");
     return {
       type: "hls",
-      url: "error://Ningun servidor responde",
+      url: "error://" + (detail ? "Ningun servidor responde. " + detail : "Ningun servidor responde"),
       headers: {
         "X-Servers": JSON.stringify(headers),
         "X-Language": this.e69LangName(g.lang),
       },
     };
-  }
-
-  async probeStream(r) {
-    if (!r || !r.url || r.url.startsWith("error://")) return false;
-    if (!/^https?:\/\//i.test(r.url)) return true;
-    if (!/\.m3u8|master\.txt|playlist\.txt|\/hls\//i.test(r.url)) return true;
-    return !!(await this.swProbe(r, 5000));
   }
 
   hostInfo(u) {
@@ -535,6 +534,7 @@ export default class extends Extension {
   }
 
   async resolveEmbed(embed, referer) {
+    this._lastResolveError = "";
     const src = this.fix(embed);
     if (!src) return null;
     if (/\.m3u8(\?|#|$)/i.test(src)) {
@@ -633,14 +633,22 @@ export default class extends Extension {
     add1("medixiru.com");
 
     let got = await this.swFirst(wave1.map((h) => this.swHost(h, id, search)));
-    if (!got) {
-      const wave2 = SW_HOSTS.map(norm).filter((h) => wave1.indexOf(h) === -1);
+    if (!got && !this._lastResolveError) {
+      const wave2 = SW_HOSTS.map(norm).filter((h) => wave1.indexOf(h) === -1).slice(0, 3);
       got = await this.swFirst(wave2.map((h) => this.swHost(h, id, search)));
     }
-    if (!got) return null;
+    if (!got) {
+      if (!this._lastResolveError) {
+        this._lastResolveError = "StreamWish no devolvió la lista de reproducción.";
+      }
+      return null;
+    }
 
     const picked = await this.swPick(got.cands);
-    if (!picked) return null;
+    if (!picked) {
+      this._lastResolveError = "StreamWish devolvió un HLS que no responde.";
+      return null;
+    }
 
     this._sw[id] = {
       url: picked.url,
@@ -651,7 +659,7 @@ export default class extends Extension {
       type: "hls",
       url: picked.url,
       headers: picked.headers,
-      verified: !!picked.verified,
+      verified: true,
     };
   }
 
@@ -662,7 +670,7 @@ export default class extends Extension {
         "https://www.google.com/"
       );
       let cands = this.swHtml(html, "https://" + host);
-      if (!cands.length) {
+      if (!cands.length && !this._lastResolveError) {
         html = await this.swGet(
           "https://" + host + "/v/" + id + search,
           "https://" + host + "/"
@@ -691,14 +699,22 @@ export default class extends Extension {
         typeof setTimeout === "function"
           ? await Promise.race([
               req,
-              new Promise((res) => setTimeout(() => res(""), 5000)),
+              new Promise((res) => setTimeout(() => res(""), 3000)),
             ])
           : await req;
     } catch (_) {
       return "";
     }
     if (typeof html !== "string" || html.length < 800) return "";
-    if (/Page is loading|Redirecting|Just a moment/i.test(html)) return "";
+    if (/no longer available|expired or has been deleted|file (?:was )?not found/i.test(html)) {
+      this._lastResolveError = "El enlace de StreamWish expiró o fue eliminado.";
+      return "";
+    }
+    if (/Page is loading|Redirecting|Just a moment/i.test(html)) {
+      this._lastResolveError =
+        "StreamWish está bloqueando la petición (Cloudflare o redirección).";
+      return "";
+    }
     return html;
   }
 
@@ -716,7 +732,9 @@ export default class extends Extension {
     let m;
     while ((m = re.exec(block[1]))) links[m[1]] = m[2];
 
-    const keys = ["hls3", "hls2", "hls4"].concat(Object.keys(links));
+    // PRIORIDAD: hls2 es el .m3u8 real con video MPEG-TS.
+    // hls3 suele ser .txt y hls4 suele ser anuncio/tiktokcdn.
+    const keys = ["hls2", "hls3", "hls4"].concat(Object.keys(links));
     const seen = {};
     for (const k of keys) {
       if (seen[k]) continue;
@@ -757,19 +775,29 @@ export default class extends Extension {
 
   swPick(cands) {
     if (!cands || !cands.length) return Promise.resolve(null);
-    const hls3 = cands.filter(
-      (c) => !/\/stream\//i.test(c.url) && !/premilkyway/i.test(c.url)
-    );
+    // Priorizar hls2 (.m3u8 estándar con segmentos .ts de video)
     const hls2 = cands.filter(
-      (c) => !/\/stream\//i.test(c.url) && /premilkyway/i.test(c.url)
+      (c) => /premilkyway|\.m3u8/i.test(c.url) && !/\/stream\//i.test(c.url)
+    );
+    const hls3 = cands.filter(
+      (c) => !/premilkyway/i.test(c.url) && !/\/stream\//i.test(c.url)
     );
     const rest = cands.filter((c) => /\/stream\//i.test(c.url));
-    const step = (list) =>
-      this.swFirst(list.map((c) => this.swProbe(c, 6500)));
-    return step(hls3)
-      .then((r) => r || step(hls2))
-      .then((r) => r || step(rest))
-      .then((r) => r || null);
+    const sorted = hls2.concat(hls3).concat(rest);
+    if (!sorted.length) return Promise.resolve(null);
+
+    const primary = sorted[0];
+    const alts = sorted.slice(1).map((x) => x.url);
+    const headers = Object.assign({}, primary.headers || {});
+    if (alts.length > 0) {
+      headers["X-Netu-Alts"] = JSON.stringify(alts);
+    }
+    return Promise.resolve({
+      type: "hls",
+      url: primary.url,
+      headers: headers,
+      verified: true,
+    });
   }
 
   swReq(url, headers, ms) {
@@ -886,7 +914,7 @@ export default class extends Extension {
     });
   }
 
-  // ---- VidHide / Earnvids (packer con file: *.m3u8) ---------------------
+  // ---- VidHide / Earnvids (packer con links = { hls2: ... }) ------------
   async vidhide(embed) {
     const src = this.fix(embed);
     const clean = src.split("#")[0];
@@ -898,22 +926,23 @@ export default class extends Extension {
     const search = (clean.match(/\?[^#]*/) || [""])[0];
     const own = (this.originOf(src) || "").replace(/^https?:\/\//i, "").toLowerCase();
 
-    const hosts = [own].concat([
-      "morencius.com",
-      "minochinos.com",
+    // Priorizar espejos activos y ultrarrápidos; descartar morencius que genera timeout
+    const hosts = [
       "callistanise.com",
-      "vsharea.com",
-      "vidhide.com",
-    ]);
-    const seen = {};
-    const list = [];
-    for (const h of hosts) {
-      if (!h || seen[h]) continue;
-      seen[h] = true;
-      list.push(h);
-      if (list.length >= 4) break;
+      "vidhidefast.com",
+      "minochinos.com",
+    ];
+    if (own && hosts.indexOf(own) === -1 && !/morencius/i.test(own)) {
+      hosts.push(own);
     }
-    return this.swFirst(list.map((h) => this.vidhideHost(h, id, search)));
+
+    const found = await this.swFirst(
+      hosts.map((h) => this.vidhideHost(h, id, search))
+    );
+    if (!found && !this._lastResolveError) {
+      this._lastResolveError = "VidHide no devolvió un stream reproducible.";
+    }
+    return found;
   }
 
   async vidhideHost(h, id, search) {
@@ -928,7 +957,7 @@ export default class extends Extension {
           "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
         },
       }),
-      4500,
+      3000,
       ""
     );
     if (typeof html !== "string" || !html) return null;
@@ -940,12 +969,19 @@ export default class extends Extension {
         this.request("", {
           headers: { "Miru-Url": page, "Referer": page, "User-Agent": UA },
         }),
-        4000,
+        3000,
         ""
       );
     }
     if (typeof html !== "string" || !html) return null;
-    if (html.indexOf("Just a moment") !== -1) return null;
+    if (/no longer available|expired or has been deleted|file (?:was )?not found/i.test(html)) {
+      this._lastResolveError = "El enlace de VidHide expiró o fue eliminado.";
+      return null;
+    }
+    if (html.indexOf("Just a moment") !== -1) {
+      this._lastResolveError = "VidHide está bloqueando la petición (Cloudflare).";
+      return null;
+    }
     return this.streamFromPage(html, "https://" + h);
   }
 
@@ -953,40 +989,86 @@ export default class extends Extension {
     const body = String(html || "");
     const abs = (u) => {
       let s = this.fix(u);
-      if (s.indexOf("/") === 0) s = origin + s;
+      if (s.indexOf("//") === 0) return "https:" + s;
+      if (s.indexOf("/") === 0) return origin + s;
       return s;
     };
-    const pick = (text) => {
-      const m =
-        text.match(
-          /file\s*:\s*["']([^"']*(?:\.m3u8|master\.txt|playlist\.txt|\/hls\/)[^"']*)["']/i
-        ) ||
-        text.match(
-          /["']((?:https?:)?\/\/[^"'<>\s]+(?:\.m3u8|master\.txt|playlist\.txt)[^"'<>\s]*)["']/i
-        ) ||
-        text.match(/["'](\/stream\/[^"']+\.m3u8[^"']*)["']/i);
-      return m ? abs(m[1]) : "";
-    };
-    let u = "";
+
+    let un = "";
     if (body.indexOf("eval(function(p,a,c,k,e") !== -1) {
-      const un = this.unpack(body);
-      if (un) u = pick(un);
+      un = this.unpack(body) || "";
     }
-    if (!u) u = pick(body);
-    let type = "hls";
-    if (!u) {
-      const m = body.match(/file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
-      if (m) {
-        u = abs(m[1]);
-        type = "mp4";
+    const text = un || body;
+
+    // 1. VidHide estructurado con var links = { "hls2": "...", ... }
+    const linksBlock =
+      text.match(/links\s*=\s*(\{[\s\S]*?\});?/) ||
+      text.match(/sources\s*[:=]\s*\[([\s\S]*?)\]/);
+    if (linksBlock) {
+      try {
+        const re = /["']([a-zA-Z0-9_]+)["']\s*:\s*["']([^"']+)["']/g;
+        const links = {};
+        let lm;
+        while ((lm = re.exec(linksBlock[1]))) {
+          links[lm[1]] = lm[2];
+        }
+        // Priorizar hls2 (.m3u8 estándar con TS), luego hls3, luego hls4
+        const ordered = ["hls2", "hls3", "hls4"].concat(Object.keys(links));
+        const cands = [];
+        for (const k of ordered) {
+          const rawU = links[k];
+          if (rawU && !cands.some((c) => c === rawU)) {
+            let u = abs(rawU);
+            if (/\.m3u8|master\.txt|playlist\.txt|\/hls\//i.test(u)) {
+              cands.push(u);
+            }
+          }
+        }
+        if (cands.length > 0) {
+          const primary = cands[0];
+          const alts = cands.slice(1);
+          const headers = { Referer: origin + "/", "User-Agent": UA };
+          if (alts.length > 0) {
+            headers["X-Netu-Alts"] = JSON.stringify(alts);
+          }
+          return {
+            type: "hls",
+            url: primary,
+            headers: headers,
+            verified: true,
+          };
+        }
+      } catch (_) {}
+    }
+
+    // 2. Extracción directa de URL .m3u8 (descartando imágenes, thumbnails, pistas)
+    const m3u8Match = text.match(
+      /["']((?:https?:)?\/\/[^"'<>\s]+\.(?:m3u8|txt)(?:\?[^"'<>\s]*)?|\/[^"'<>\s]+\.m3u8(?:\?[^"'<>\s]*)?)["']/i
+    );
+    if (m3u8Match) {
+      const u = abs(m3u8Match[1]);
+      if (!/dl\?op=|\.jpg|\.png|\.webp|thumbnails/i.test(u)) {
+        return {
+          type: "hls",
+          url: u,
+          headers: { Referer: origin + "/", "User-Agent": UA },
+          verified: true,
+        };
       }
     }
-    if (!u) return null;
-    return {
-      type: type,
-      url: u,
-      headers: { Referer: origin + "/", "User-Agent": UA },
-    };
+
+    // 3. MP4 directo
+    const mp4Match = text.match(/file\s*:\s*["']([^"']+\.mp4(?:\?[^"']*)?)["']/i);
+    if (mp4Match) {
+      return {
+        type: "mp4",
+        url: abs(mp4Match[1]),
+        headers: { Referer: origin + "/", "User-Agent": UA },
+        verified: true,
+      };
+    }
+
+    return null;
   }
 
   // ---- Vimeus -> Vimeos (packer) -----------------------------------------
@@ -1198,6 +1280,11 @@ export default class extends Extension {
           continue;
         }
         if (typeof res !== "string" || !res) continue;
+        if (/Confirm you(?:'|&#39;|’)?re human|altcha|verify you are human|cf-turnstile|hcaptcha/i.test(res)) {
+          this._lastResolveError =
+            "VOE requiere verificación humana (Altcha); no se puede resolver automáticamente.";
+          continue;
+        }
 
         const red = res.match(/window\.location\.href\s*=\s*['"](https?:\/\/[^'"]+)['"]/i);
         if (red && res.indexOf("application/json") === -1) {
@@ -1212,12 +1299,23 @@ export default class extends Extension {
           } catch (_) {}
         }
 
+        if (/Confirm you(?:'|&#39;|’)?re human|altcha|verify you are human|cf-turnstile|hcaptcha/i.test(res)) {
+          this._lastResolveError =
+            "VOE requiere verificación humana (Altcha); no se puede resolver automáticamente.";
+          continue;
+        }
+
         if (res.indexOf('<script type="application/json">["') !== -1 || /\.m3u8/i.test(res)) {
           html = res;
           break;
         }
       }
-      if (!html) return null;
+      if (!html) {
+        if (!this._lastResolveError) {
+          this._lastResolveError = "VOE no devolvió la configuración del video.";
+        }
+        return null;
+      }
 
       let url = "";
       const m = html.match(/<script type="application\/json">\["([^"]+)"\]<\/script>/);
@@ -1249,7 +1347,10 @@ export default class extends Extension {
         const d = html.match(/['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i);
         if (d) url = d[1];
       }
-      if (!url) return null;
+      if (!url) {
+        this._lastResolveError = "VOE no expuso una URL de video válida.";
+        return null;
+      }
 
       url = this.fix(url);
       if (search && url.indexOf("t=") === -1) {

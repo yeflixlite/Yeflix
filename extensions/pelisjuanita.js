@@ -720,6 +720,8 @@ export default class extends Extension {
   }
 
   // ---- StreamWish (packer links.hls2/hls3 + CDN real) --------------------
+  // Devuelve {type:"hls", url, headers} cuando se resuelve un m3u8, o null
+  // cuando no se pudo resolver (preserva la cadena de fallo de resolveEmbed).
   async streamwish(embed) {
     const src = this.fix(embed);
     const clean = src.split("#")[0];
@@ -727,13 +729,18 @@ export default class extends Extension {
       /\.html?$/i,
       ""
     );
-    if (!id) return null;
+    if (!id) {
+      console.log("streamwish: id invalido");
+      return null;
+    }
     const search = (clean.match(/\?[^#]*/) || [""])[0];
     const own = (this.originOf(src) || "").replace(/^https?:\/\//i, "").toLowerCase();
 
-    const hosts = SW_HOSTS.concat([own]);
+    const hosts = SW_HOSTS.concat([own]).filter(Boolean);
     const seen = {};
-    for (const h of hosts.slice(0, 4)) {
+    const intentos = [];
+
+    for (const h of hosts) {
       if (!h || seen[h]) continue;
       seen[h] = true;
       for (const path of ["/e/", "/v/"]) {
@@ -752,8 +759,14 @@ export default class extends Extension {
         } catch (_) {
           html = "";
         }
-        if (typeof html !== "string" || html.length < 500) continue;
-        // Cascara "Page is loading": reintento con la cookie ya guardada.
+        if (typeof html !== "string" || html.length < 500) {
+          intentos.push(`${h}${path}: sin respuesta valida`);
+          continue;
+        }
+        if (html.indexOf("Just a moment") !== -1) {
+          intentos.push(`${h}${path}: proteccion Cloudflare`);
+          continue;
+        }
         if (html.indexOf("Page is loading") !== -1 || html.indexOf("Redirecting") !== -1) {
           try {
             html = await this.request("", {
@@ -761,21 +774,30 @@ export default class extends Extension {
             });
           } catch (_) {}
         }
-        if (typeof html !== "string" || !html) continue;
-        if (html.indexOf("Just a moment") !== -1) continue;
+        if (typeof html !== "string" || !html) {
+          intentos.push(`${h}${path}: vacio tras reintento`);
+          continue;
+        }
 
         const r = await this.swHtml(html, "https://" + h);
-        if (r) return r;
+        if (r) {
+          console.log("streamwish resuelto: " + h + path + " -> " + r.url);
+          return r;
+        }
         const d = html.match(/["']((?:https?:)?\/\/[^"']+\.m3u8[^"']*)["']/i);
         if (d) {
+          const url = this.fix(d[1]);
+          console.log("streamwish m3u8 directo: " + url);
           return {
             type: "hls",
-            url: this.fix(d[1]),
+            url: url,
             headers: { Referer: "https://" + h + "/", "User-Agent": UA },
           };
         }
+        intentos.push(`${h}${path}: enlaces hls no encontrados`);
       }
     }
+    console.log("streamwish fallido: " + intentos.join("; "));
     return null;
   }
 

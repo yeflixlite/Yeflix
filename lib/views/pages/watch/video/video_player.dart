@@ -12,12 +12,13 @@ class VideoPlayer extends StatefulWidget {
   const VideoPlayer({
     super.key,
     required this.playList,
-    required this.runtime,
+    this.runtime,
     required this.episodeGroupId,
     required this.playerIndex,
     required this.title,
     required this.detailUrl,
     required this.anilistID,
+    this.localFilePath,
   });
 
   final String title;
@@ -25,8 +26,9 @@ class VideoPlayer extends StatefulWidget {
   final String detailUrl;
   final int playerIndex;
   final int episodeGroupId;
-  final ExtensionService runtime;
+  final ExtensionService? runtime;
   final String anilistID;
+  final String? localFilePath;
 
   @override
   State<VideoPlayer> createState() => _VideoPlayerState();
@@ -46,6 +48,7 @@ class _VideoPlayerState extends State<VideoPlayer> {
         episodeGroupId: widget.episodeGroupId,
         runtime: widget.runtime,
         anilistID: widget.anilistID,
+        localFilePath: widget.localFilePath,
       ),
       tag: widget.title,
     );

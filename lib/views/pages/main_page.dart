@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jiruhub/views/pages/extension/extension_page.dart';
 import 'package:jiruhub/views/pages/home_page.dart';
+import 'package:jiruhub/views/pages/offline_page.dart';
 import 'package:jiruhub/controllers/main_controller.dart';
 import 'package:jiruhub/views/pages/search/search_page.dart';
 import 'package:jiruhub/views/pages/settings/settings_page.dart';
@@ -191,6 +192,7 @@ class _AndroidMainPageState extends fluent.State<AndroidMainPage> {
     SearchPage(),
     ExtensionPage(),
     SettingsPage(),
+    OfflinePage(),
   ];
 
   @override
@@ -211,6 +213,8 @@ class _AndroidMainPageState extends fluent.State<AndroidMainPage> {
           Icons.extension_outlined, Icons.extension, 'common.extension'.i18n),
       _Destination(
           Icons.settings_outlined, Icons.settings, 'common.settings'.i18n),
+      _Destination(
+          Icons.file_download_outlined, Icons.file_download, 'offline.title'.i18n),
     ];
     return Obx(
       () => Scaffold(

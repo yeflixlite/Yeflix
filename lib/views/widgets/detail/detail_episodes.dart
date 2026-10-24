@@ -103,6 +103,19 @@ class _DetailEpisodesState extends State<DetailEpisodes> {
                             index]
                         .name)
                     : Text(episodes[c.selectEpGroup.value].urls[index].name),
+                trailing: IconButton(
+                  icon: const Icon(Icons.download, size: 20),
+                  tooltip: 'offline.download'.i18n,
+                  onPressed: () {
+                    final ep = isRevered
+                        ? episodes[c.selectEpGroup.value]
+                            .urls[episodes[c.selectEpGroup.value].urls.length -
+                                1 -
+                                index]
+                        : episodes[c.selectEpGroup.value].urls[index];
+                    c.downloadEpisode(context, ep, episodeIndex: index);
+                  },
+                ),
                 onTap: () {
                   c.goWatch(
                     context,
