@@ -292,13 +292,16 @@ class VideoPlayerController extends GetxController {
   /// Callback de error del reproductor nativo ExoPlayer.
   void onExoError(String message) {
     logger.severe('ExoPlayer error: $message');
-    exoLoading.value = false;
-    // Solo mostrar error si NO hay video reproduciéndose ni frame activo
-    if (!isPlaying.value && (position.value.inSeconds == 0)) {
-      error.value = 'ExoPlayer: $message';
-      serverFailedMessage.value = 'Error de reproducción: $message';
-      isPlaying.value = false;
+    // No mostrar error si hay reproducción activa (p.ej. errores de segmentos
+    // de thumbnails en HLS de VidHide mientras el video principal está OK)
+    if (isPlaying.value || exoIsPlaying.value || exoPositionMs.value > 0) {
+      logger.warning('ExoPlayer error ignorado (reproducción activa): $message');
+      return;
     }
+    exoLoading.value = false;
+    error.value = 'ExoPlayer: $message';
+    serverFailedMessage.value = 'Error de reproducción: $message';
+    isPlaying.value = false;
   }
 
   /// Callback de cambio de estado del reproductor nativo ExoPlayer.
@@ -1402,6 +1405,8 @@ class VideoPlayerController extends GetxController {
       if (!completer.isCompleted) completer.complete(ok);
     }
 
+    // Solo aceptar como éxito real: primer frame renderizado o isPlaying=true
+    // NO aceptar STATE_BUFFERING(2) solo, ya que no garantiza reproducción real
     subs.add(exo.onRenderedFirstFrame.listen((_) {
       logger.info('_tryOpenExo: primer frame renderizado -> OK');
       finish(true);
@@ -1416,30 +1421,44 @@ class VideoPlayerController extends GetxController {
 
     subs.add(exo.onStateChanged.listen((args) {
       final state = args['playbackState'] as int? ?? 0;
-      final playing = args['playWhenReady'] == true;
       final isPl = args['isPlaying'] as bool? ?? false;
-      // Media3: STATE_IDLE = 1, STATE_BUFFERING = 2, STATE_READY = 3, STATE_ENDED = 4
-      if (state == 3 || isPl || (state == 2 && playing)) {
-        logger.info(
-            '_tryOpenExo: state=$state playing=$playing isPl=$isPl -> OK');
+      // Media3: STATE_READY = 3 (stream confirmado listo para reproducir)
+      // No aceptar STATE_BUFFERING (2) solo, puede ser buffering de stream roto
+      if (state == 3 || isPl) {
+        logger.info('_tryOpenExo: state=$state isPl=$isPl -> OK');
         finish(true);
       }
     }));
+
     subs.add(exo.onError.listen((err) {
-      logger.severe('_tryOpenExo error: $err');
-      finish(false);
+      // Solo marcar como fallo si no hay reproducción en curso
+      if (!isPlaying.value && exoPositionMs.value == 0) {
+        logger.severe('_tryOpenExo error: $err');
+        finish(false);
+      } else {
+        // Error en stream que ya se reproduce (p.ej. segmento 4xx de thumbnail) - ignorar
+        logger.warning('_tryOpenExo error ignorado (ya hay reproducción): $err');
+      }
     }));
 
+    // Timeout extendido a 12s para VidHide/CDNs lentos
     var ok = await completer.future.timeout(
-      const Duration(seconds: 5),
-      onTimeout: () => false,
+      const Duration(seconds: 12),
+      onTimeout: () {
+        // Al timeout, verificar si ExoPlayer ya está reproduciendo de facto
+        if (isPlaying.value || exoPositionMs.value > 0 || exoIsPlaying.value) {
+          logger.info('_tryOpenExo: timeout pero hay reproducción activa -> OK');
+          return true;
+        }
+        // Verificar posición en el timer activo
+        logger.warning('_tryOpenExo: timeout de 12s sin confirmación de reproducción');
+        return false;
+      },
     );
 
-    // Si hubo timeout pero ExoPlayer ya está activo o con posición > 0
-    if (!ok &&
-        (isPlaying.value || exoPositionMs.value > 0 || exoIsPlaying.value)) {
-      logger.info(
-          '_tryOpenExo: timeout pero ya hay progreso/reproducción -> OK');
+    // Verificación final: si exo ya avanzó en posición, es éxito
+    if (!ok && (isPlaying.value || exoPositionMs.value > 0 || exoIsPlaying.value)) {
+      logger.info('_tryOpenExo: marcado OK por estado actual post-timeout');
       ok = true;
     }
 
