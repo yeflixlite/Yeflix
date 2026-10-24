@@ -59,7 +59,7 @@ Para acceder al catálogo de películas, series y anime, agrega el repositorio o
 3. Presiona el botón **+** (Agregar).
 4. Pega la URL del repositorio oficial:
    ```txt
-   https://raw.githubusercontent.com/yeflixlite/Anime/main/index.json
+   https://raw.githubusercontent.com/yeflixlite/Anime/main
    ```
 5. Presiona **Recargar** o **Aceptar**.
 6. ¡Listo! Ya puedes explorar e instalar extensiones como *Pelis Premium*, *LatAnime*, entre otras.
