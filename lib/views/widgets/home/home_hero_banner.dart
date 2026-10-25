@@ -131,22 +131,21 @@ class _HomeHeroBannerState extends State<HomeHeroBanner> {
               ),
             ),
 
-            // 3. Barra Superior: ÚNICAMENTE EL LOGO DE YEFLIX (Simple, limpio y profesional)
+            // 3. Barra Superior: ÚNICAMENTE LA 'Y' ROJA DE YEFLIX (Simple, limpio y profesional)
             Positioned(
               top: topPadding + 10,
               left: 20,
               child: Image.asset(
-                'assets/icon/yeflix_logo.png',
-                height: 32,
+                'assets/icon/yeflix_y.png',
+                height: 38,
                 fit: BoxFit.contain,
                 errorBuilder: (context, error, stackTrace) {
                   return const Text(
-                    'YEFLIX',
+                    'Y',
                     style: TextStyle(
                       color: YeflixStyle.red,
-                      fontSize: 26,
+                      fontSize: 32,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 2,
                     ),
                   );
                 },
@@ -409,12 +408,12 @@ class _HomeHeroBannerState extends State<HomeHeroBanner> {
             top: topPadding + 10,
             left: 20,
             child: Image.asset(
-              'assets/icon/yeflix_logo.png',
-              height: 32,
+              'assets/icon/yeflix_y.png',
+              height: 38,
               fit: BoxFit.contain,
               errorBuilder: (_, __, ___) => const Text(
-                'YEFLIX',
-                style: TextStyle(color: YeflixStyle.red, fontSize: 26, fontWeight: FontWeight.bold),
+                'Y',
+                style: TextStyle(color: YeflixStyle.red, fontSize: 32, fontWeight: FontWeight.bold),
               ),
             ),
           ),
