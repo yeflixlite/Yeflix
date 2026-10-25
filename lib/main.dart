@@ -239,6 +239,17 @@ class _MainAppState extends State<MainApp> {
       themeMode: c.theme,
       darkTheme: fluent.FluentThemeData(
         brightness: Brightness.dark,
+        accentColor: fluent.AccentColor.swatch(const {
+          'darkest': Color(0xFF8B0000),
+          'darker': Color(0xFFB20710),
+          'dark': Color(0xFFC70812),
+          'normal': Color(0xFFE50914),
+          'light': Color(0xFFE82E37),
+          'lighter': Color(0xFFEC525A),
+          'lightest': Color(0xFFF0777D),
+        }),
+        scaffoldBackgroundColor: const Color(0xFF0E0E11),
+        cardColor: const Color(0xFF16161D),
         visualDensity: VisualDensity.standard,
       ),
       theme: fluent.FluentThemeData(

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:fluent_ui/fluent_ui.dart' as fluent;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -13,6 +15,7 @@ import 'package:jiruhub/utils/application.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/layout.dart';
 import 'package:jiruhub/utils/jiruhub_storage.dart';
+import 'package:jiruhub/utils/yeflix_style.dart';
 import 'package:window_manager/window_manager.dart';
 
 class DesktopMainPage extends StatefulWidget {
@@ -51,14 +54,24 @@ class _DesktopMainPageState extends State<DesktopMainPage> with WindowListener {
   }
 
   Widget _title() {
-    return const DragToMoveArea(
+    return DragToMoveArea(
       child: Align(
         alignment: AlignmentDirectional.centerStart,
-        child: Text(
-          'Yeflix',
-          style: TextStyle(
-            fontSize: 20.0,
-            fontWeight: FontWeight.bold,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 4.0),
+          child: Image.asset(
+            'assets/icon/yeflix_logo.png',
+            height: 24,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Text(
+              'YEFLIX',
+              style: TextStyle(
+                color: YeflixStyle.red,
+                fontSize: 20.0,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 2,
+              ),
+            ),
           ),
         ),
       ),
@@ -174,6 +187,11 @@ class _DesktopMainPageState extends State<DesktopMainPage> with WindowListener {
         "${value.dx},${value.dy}",
       );
     });
+  }
+
+  @override
+  void onWindowClose() {
+    exit(0);
   }
 }
 

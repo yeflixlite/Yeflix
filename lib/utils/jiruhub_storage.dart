@@ -115,7 +115,7 @@ class JiruHubStorage {
     await _initSetting(SettingKey.autoCheckUpdate, true);
     await _initSetting(SettingKey.language, 'en');
     await _initSetting(SettingKey.novelFontSize, 18.0);
-    await _initSetting(SettingKey.theme, 'system');
+    await _initSetting(SettingKey.theme, 'dark');
     await _initSetting(SettingKey.enableNSFW, false);
     await _initSetting(SettingKey.videoPlayer, 'built-in');
     await _initSetting(SettingKey.listMode, "grid");

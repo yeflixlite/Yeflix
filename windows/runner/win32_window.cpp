@@ -179,12 +179,21 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_CLOSE:
+      if (quit_on_close_) {
+        ::ExitProcess(0);
+      }
+      if (window_handle_) {
+        DestroyWindow(window_handle_);
+      }
+      return 0;
+
     case WM_DESTROY:
       window_handle_ = nullptr;
-      Destroy();
       if (quit_on_close_) {
-        PostQuitMessage(0);
+        ::ExitProcess(0);
       }
+      Destroy();
       return 0;
 
     case WM_DPICHANGED: {

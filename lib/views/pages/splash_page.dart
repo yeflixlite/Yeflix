@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:jiruhub/utils/yeflix_style.dart';
 import 'package:jiruhub/views/pages/main_page.dart';
 
@@ -65,12 +68,16 @@ class _SplashPageState extends State<SplashPage>
 
     _controller.forward().then((_) {
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            transitionDuration: Duration.zero,
-            pageBuilder: (_, __, ___) => const AndroidMainPage(),
-          ),
-        );
+        if (Platform.isAndroid) {
+          Navigator.of(context).pushReplacement(
+            PageRouteBuilder(
+              transitionDuration: Duration.zero,
+              pageBuilder: (_, __, ___) => const AndroidMainPage(),
+            ),
+          );
+        } else {
+          context.go('/');
+        }
       }
     });
   }
@@ -100,12 +107,7 @@ class _SplashPageState extends State<SplashPage>
                   opacity: _fadeIn,
                   child: FadeTransition(
                     // Segunda capa de fade-out para salida suave
-                    opacity: Tween<double>(begin: 1.0, end: 0.0).animate(
-                      CurvedAnimation(
-                        parent: _controller,
-                        curve: const Interval(0.70, 0.95, curve: Curves.easeIn),
-                      ),
-                    ),
+                    opacity: _fadeOut,
                     child: ScaleTransition(
                       scale: _scaleIn,
                       child: Image.asset(

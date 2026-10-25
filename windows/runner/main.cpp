@@ -7,6 +7,25 @@
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  // Asegurar una sola instancia activa de Yeflix
+  HANDLE hMutex = ::CreateMutex(nullptr, TRUE, L"Yeflix_Single_Instance_Mutex");
+  if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+    HWND existingHwnd = ::FindWindow(L"FLUTTER_RUNNER_WIN32_WINDOW", L"yeflix");
+    if (!existingHwnd) {
+      existingHwnd = ::FindWindow(L"FLUTTER_RUNNER_WIN32_WINDOW", nullptr);
+    }
+    if (existingHwnd) {
+      if (::IsIconic(existingHwnd)) {
+        ::ShowWindow(existingHwnd, SW_RESTORE);
+      }
+      ::SetForegroundWindow(existingHwnd);
+    }
+    if (hMutex) {
+      ::CloseHandle(hMutex);
+    }
+    return EXIT_SUCCESS;
+  }
+
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
@@ -28,6 +47,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"yeflix", origin, size)) {
+    if (hMutex) {
+      ::ReleaseMutex(hMutex);
+      ::CloseHandle(hMutex);
+    }
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
@@ -39,5 +62,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ::CoUninitialize();
+  if (hMutex) {
+    ::ReleaseMutex(hMutex);
+    ::CloseHandle(hMutex);
+  }
+  // Terminar de inmediato todos los hilos secundarios (media_kit / mpv, isolate, worker threads)
+  ::ExitProcess(EXIT_SUCCESS);
   return EXIT_SUCCESS;
 }

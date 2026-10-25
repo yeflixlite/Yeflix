@@ -51,6 +51,11 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // Terminar de inmediato cuando se solicita cerrar la ventana (evita retrasos de isolates/mpv)
+  if (message == WM_CLOSE) {
+    ::ExitProcess(0);
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

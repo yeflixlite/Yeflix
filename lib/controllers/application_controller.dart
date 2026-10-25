@@ -5,7 +5,7 @@ import 'package:jiruhub/utils/jiruhub_storage.dart';
 class ApplicationController extends GetxController {
   static get find => Get.find();
 
-  final themeText = "system".obs;
+  final themeText = "dark".obs;
 
   static const List<String> cjkFontFallback = [
     "Noto Sans CJK JP",

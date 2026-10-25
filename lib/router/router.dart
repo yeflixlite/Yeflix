@@ -18,6 +18,7 @@ import 'package:jiruhub/views/pages/search/search_page.dart';
 import 'package:jiruhub/views/pages/settings/settings_page.dart';
 import 'package:jiruhub/views/pages/tracking/anilist_more_page.dart';
 import 'package:jiruhub/views/pages/tracking/anilist_tracking_page.dart';
+import 'package:jiruhub/views/pages/splash_page.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
@@ -31,7 +32,12 @@ BuildContext get currentContext {
 
 final router = GoRouter(
   navigatorKey: rootNavigatorKey,
+  initialLocation: '/splash',
   routes: [
+    GoRoute(
+      path: '/splash',
+      builder: (context, state) => const SplashPage(),
+    ),
     ShellRoute(
       navigatorKey: _shellNavigatorKey,
       builder: (context, state, child) {
