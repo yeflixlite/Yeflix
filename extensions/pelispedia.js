@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis Premium
-// @version      v0.1.6
+// @version      v0.1.8
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -393,7 +393,7 @@ export default class extends Extension {
     for (const s of list) {
       let r = null;
       try {
-        r = await this.limit(this.resolveEmbed(s.url, referer), 3500, null);
+        r = await this.limit(this.resolveEmbed(s.url, referer), 4500, null);
       } catch (_) {
         r = null;
       }
@@ -431,7 +431,7 @@ export default class extends Extension {
     if (/streamwish|hglink|streamhg|playnixes|hglamioz|medixiru|awish|hgcloud|sfastwish|wishfast|streamhide|desiupload/i.test(s)) {
       return { key: "streamwish", name: "StreamWish" };
     }
-    if (/vidhide|earnvids|morencius|callistanise|minochinos|vsharea|vhide|vid-hide/i.test(s)) {
+    if (/vidhide|earnvids|morencius|callistanise|minochinos|vsharea|vhide|vid-hide|vidhideplus/i.test(s)) {
       return { key: "vidhide", name: "VidHide" };
     }
     return null;
@@ -506,6 +506,21 @@ export default class extends Extension {
 
   rankHost(u) {
     const h = (String(u || "").match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
+    // 0 = VidHide (PREDETERMINADO / PRIMERA OPCIÓN)
+    if (
+      h.indexOf("vidhide") !== -1 ||
+      h.indexOf("earnvids") !== -1 ||
+      h.indexOf("callistanise") !== -1 ||
+      h.indexOf("morencius") !== -1 ||
+      h.indexOf("minochinos") !== -1 ||
+      h.indexOf("vsharea") !== -1 ||
+      h.indexOf("vidhideplus") !== -1 ||
+      h.indexOf("vidhidefast") !== -1 ||
+      h.indexOf("vidhidepro") !== -1 ||
+      h.indexOf("vidhidepre") !== -1
+    )
+      return 0;
+    // 1 = StreamWish (RESPALDO AUTOMÁTICO)
     if (
       h.indexOf("streamwish") !== -1 ||
       h.indexOf("hglink") !== -1 ||
@@ -513,23 +528,15 @@ export default class extends Extension {
       h.indexOf("playnixes") !== -1 ||
       h.indexOf("hglamioz") !== -1 ||
       h.indexOf("medixiru") !== -1 ||
-      h.indexOf("hglink") !== -1 ||
       h.indexOf("hgcloud") !== -1 ||
       h.indexOf("awish") !== -1 ||
       h.indexOf("streamhide") !== -1
     )
-      return 0;
-    if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 1;
-    if (
-      h.indexOf("vidhide") !== -1 ||
-      h.indexOf("earnvids") !== -1 ||
-      h.indexOf("callistanise") !== -1 ||
-      h.indexOf("minochinos") !== -1 ||
-      h.indexOf("vsharea") !== -1 ||
-      h.indexOf("morencius") !== -1
-    )
-      return 2;
-    if (h.indexOf("voe") !== -1) return 3;
+      return 1;
+    // 2 = Filemoon / Byse
+    if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 2;
+    // 3 = VOE
+    if (h.indexOf("voe") !== -1 || VOE_RE.test(h)) return 3;
     return 9;
   }
 
@@ -544,20 +551,24 @@ export default class extends Extension {
       return { type: "mp4", url: src, headers: { Referer: referer, "User-Agent": UA } };
     }
 
-    if (BYSE_RE.test(src)) {
-      const r = await this.byse(src);
+    // 1. VidHide prioritario
+    if (/vidhide|earnvids|morencius|callistanise|minochinos|vsharea|vhide|vid-hide|vidhideplus|vidhidefast/i.test(src)) {
+      const r = await this.vidhide(src);
       if (r) return r;
     }
-    if (VOE_RE.test(src)) {
-      const r = await this.voe(src);
-      if (r) return r;
-    }
+    // 2. StreamWish como respaldo
     if (/streamwish|hglink|streamhg|playnixes|hglamioz|medixiru|awish|wish/i.test(src)) {
       const r = await this.streamwish(src);
       if (r) return r;
     }
-    if (/vidhide|earnvids|morencius|callistanise|minochinos|vsharea|vhide|vid-hide/i.test(src)) {
-      const r = await this.vidhide(src);
+    // 3. Filemoon / Byse
+    if (BYSE_RE.test(src)) {
+      const r = await this.byse(src);
+      if (r) return r;
+    }
+    // 4. VOE
+    if (VOE_RE.test(src)) {
+      const r = await this.voe(src);
       if (r) return r;
     }
     if (/vimeus|vimeos/i.test(src)) {
@@ -914,7 +925,7 @@ export default class extends Extension {
     });
   }
 
-  // ---- VidHide / Earnvids (packer con links = { hls2: ... }) ------------
+  // ---- VidHide: priorizado como #1, paralelo ultra-rápido, /embed/ directo + cache ----
   async vidhide(embed) {
     const src = this.fix(embed);
     const clean = src.split("#")[0];
@@ -924,65 +935,122 @@ export default class extends Extension {
       : (clean.split("?")[0].split("/").filter(Boolean).pop() || "");
     if (!id) return null;
     const search = (clean.match(/\?[^#]*/) || [""])[0];
-    const own = (this.originOf(src) || "").replace(/^https?:\/\//i, "").toLowerCase();
+    const own = (this.originOf(src) || "")
+      .replace(/^https?:\/\//i, "")
+      .replace(/^www\./i, "")
+      .replace(/\/.*$/, "")
+      .toLowerCase();
 
-    // Priorizar espejos activos y ultrarrápidos; descartar morencius que genera timeout
-    const hosts = [
-      "callistanise.com",
-      "vidhidefast.com",
-      "minochinos.com",
-    ];
-    if (own && hosts.indexOf(own) === -1 && !/morencius/i.test(own)) {
-      hosts.push(own);
+    this._vh = this._vh || {};
+    const now = Date.now();
+    const hit = this._vh[id];
+    if (hit && hit.exp > now) {
+      return { type: "hls", url: hit.url, headers: Object.assign({}, hit.headers) };
     }
+
+    const norm = (h) =>
+      String(h || "")
+        .replace(/^https?:\/\//i, "")
+        .replace(/^www\./i, "")
+        .replace(/\/.*$/, "")
+        .toLowerCase();
+
+    // Espejos ordenados: el propio origen del enlace (morencius/callistanise) y espejos activos directos
+    const hosts = [];
+    const addHost = (h) => {
+      h = norm(h);
+      if (h && hosts.indexOf(h) === -1) hosts.push(h);
+    };
+    if (own) addHost(own);
+    addHost("callistanise.com");
+    addHost("morencius.com");
+    addHost("vidhidefast.com");
 
     const found = await this.swFirst(
       hosts.map((h) => this.vidhideHost(h, id, search))
     );
-    if (!found && !this._lastResolveError) {
-      this._lastResolveError = "VidHide no devolvió un stream reproducible.";
+    if (!found) {
+      if (!this._lastResolveError) {
+        this._lastResolveError = "VidHide no devolvió un stream reproducible.";
+      }
+      return null;
     }
+
+    this._vh[id] = {
+      url: found.url,
+      headers: Object.assign({}, found.headers || {}),
+      exp: now + 600000, // 10 minutos de caché
+    };
     return found;
   }
 
   async vidhideHost(h, id, search) {
-    const page = "https://" + h + "/v/" + id + search;
-    let html = await this.limit(
-      this.request("", {
-        headers: {
-          "Miru-Url": page,
-          "Referer": "https://google.com/",
-          "User-Agent": UA,
-          "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-          "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        },
-      }),
-      3000,
-      ""
-    );
-    if (typeof html !== "string" || !html) return null;
+    // Probar /embed/ primero (más rápido, directo), luego /v/ si hiciera falta
+    try {
+      let page = "https://" + h + "/embed/" + id + search;
+      let html = await this.vidhideGet(page, "https://google.com/");
+      let stream = html ? this.streamFromPage(html, "https://" + h) : null;
+      if (!stream && !this._lastResolveError) {
+        page = "https://" + h + "/v/" + id + search;
+        html = await this.vidhideGet(page, "https://" + h + "/");
+        if (html) stream = this.streamFromPage(html, "https://" + h);
+      }
+      return stream;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async vidhideGet(url, referer) {
+    const req = this.request("", {
+      headers: {
+        "Miru-Url": url,
+        "Referer": referer || "https://google.com/",
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+      },
+    }).catch(() => "");
+    let html = "";
+    try {
+      html =
+        typeof setTimeout === "function"
+          ? await Promise.race([
+              req,
+              new Promise((res) => setTimeout(() => res(""), 3500)),
+            ])
+          : await req;
+    } catch (_) {
+      return "";
+    }
+    if (typeof html !== "string" || !html || html.length < 500) return "";
     if (
       html.length < 2000 &&
       (html.indexOf("Page is loading") !== -1 || html.indexOf("Redirecting") !== -1)
     ) {
-      html = await this.limit(
-        this.request("", {
-          headers: { "Miru-Url": page, "Referer": page, "User-Agent": UA },
-        }),
-        3000,
-        ""
-      );
+      try {
+        const req2 = this.request("", {
+          headers: { "Miru-Url": url, "Referer": url, "User-Agent": UA },
+        }).catch(() => "");
+        html =
+          typeof setTimeout === "function"
+            ? await Promise.race([
+                req2,
+                new Promise((res) => setTimeout(() => res(""), 3500)),
+              ])
+            : await req2;
+      } catch (_) {}
     }
-    if (typeof html !== "string" || !html) return null;
+    if (typeof html !== "string" || !html) return "";
     if (/no longer available|expired or has been deleted|file (?:was )?not found/i.test(html)) {
       this._lastResolveError = "El enlace de VidHide expiró o fue eliminado.";
-      return null;
+      return "";
     }
     if (html.indexOf("Just a moment") !== -1) {
       this._lastResolveError = "VidHide está bloqueando la petición (Cloudflare).";
-      return null;
+      return "";
     }
-    return this.streamFromPage(html, "https://" + h);
+    return html;
   }
 
   streamFromPage(html, origin) {
@@ -1282,8 +1350,8 @@ export default class extends Extension {
         if (typeof res !== "string" || !res) continue;
         if (/Confirm you(?:'|&#39;|’)?re human|altcha|verify you are human|cf-turnstile|hcaptcha/i.test(res)) {
           this._lastResolveError =
-            "VOE requiere verificación humana (Altcha); no se puede resolver automáticamente.";
-          continue;
+            "VOE requiere verificación humana (Altcha); use VidHide o StreamWish.";
+          return null;
         }
 
         const red = res.match(/window\.location\.href\s*=\s*['"](https?:\/\/[^'"]+)['"]/i);
@@ -1301,8 +1369,8 @@ export default class extends Extension {
 
         if (/Confirm you(?:'|&#39;|’)?re human|altcha|verify you are human|cf-turnstile|hcaptcha/i.test(res)) {
           this._lastResolveError =
-            "VOE requiere verificación humana (Altcha); no se puede resolver automáticamente.";
-          continue;
+            "VOE requiere verificación humana (Altcha); use VidHide o StreamWish.";
+          return null;
         }
 
         if (res.indexOf('<script type="application/json">["') !== -1 || /\.m3u8/i.test(res)) {

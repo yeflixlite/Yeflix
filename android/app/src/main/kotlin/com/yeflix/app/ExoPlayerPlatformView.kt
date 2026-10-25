@@ -44,7 +44,7 @@ class ExoPlayerPlatformView(
     private val player = ExoPlayer.Builder(context)
         .setLoadControl(
             DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 50_000, 1_500, 3_000)
+                .setBufferDurationsMs(20_000, 50_000, 2_500, 4_000)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build()
         )

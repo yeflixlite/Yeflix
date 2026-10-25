@@ -177,6 +177,7 @@ class VideoPlayerController extends GetxController {
   ExtensionBangumiWatch? watchData;
   final error = "".obs;
   final isGettingWatchData = true.obs;
+  int _playSessionId = 0;
 
   // Selector de servidores (llenado desde X-Servers header de la extensión)
   final availableServers = <String, String>{}.obs; // nombre → embed URL
@@ -666,6 +667,7 @@ class VideoPlayerController extends GetxController {
     if (!Get.isRegistered<VideoPlayerController>(tag: title)) {
       return;
     }
+    final sessionId = ++_playSessionId;
     player.stop();
     isGettingWatchData.value = true;
     error.value = '';
@@ -680,9 +682,11 @@ class VideoPlayerController extends GetxController {
         } else {
           await player.open(Media(localFilePath!));
         }
+        if (sessionId != _playSessionId) return;
         isGettingWatchData.value = false;
         return;
       } catch (e) {
+        if (sessionId != _playSessionId) return;
         logger.severe('local file open error: $e');
         error.value = e.toString();
         serverFailedMessage.value = 'Error al abrir archivo local: $e';
@@ -702,12 +706,15 @@ class VideoPlayerController extends GetxController {
     try {
       await getWatchData();
     } catch (e) {
+      if (sessionId != _playSessionId) return;
       logger.severe(e);
       error.value = e.toString();
       serverFailedMessage.value = 'Error al obtener fuentes: $e';
       isGettingWatchData.value = false;
       return;
     }
+
+    if (sessionId != _playSessionId) return;
 
     if (watchData == null) {
       error.value = 'No se encontraron datos de reproducción.';
@@ -738,6 +745,7 @@ class VideoPlayerController extends GetxController {
           logger.info(
               'Intentando servidor primario: ${currentServerName.value} → $primaryUrl');
           bool worked = await _openStream(primaryUrl, watchData!.headers);
+          if (sessionId != _playSessionId) return;
 
           if (!worked &&
               watchData!.headers != null &&
@@ -746,9 +754,11 @@ class VideoPlayerController extends GetxController {
               final List<dynamic> alts =
                   jsonDecode(watchData!.headers!['X-Netu-Alts']!);
               for (final altUrlDyn in alts) {
+                if (sessionId != _playSessionId) return;
                 final altUrl = altUrlDyn.toString();
                 logger.info('Intentando URL alternativa: $altUrl');
                 worked = await _openStream(altUrl, watchData!.headers);
+                if (sessionId != _playSessionId) return;
                 if (worked) {
                   watchData = ExtensionBangumiWatch(
                     type: watchData!.type,
@@ -765,6 +775,8 @@ class VideoPlayerController extends GetxController {
             }
           }
 
+          if (sessionId != _playSessionId) return;
+
           if (!worked) {
             logger.severe(
                 'Servidor primario fallido: ${currentServerName.value}');
@@ -776,6 +788,7 @@ class VideoPlayerController extends GetxController {
             logger.info(
                 'Servidores disponibles para failover: ${serverEntries.map((e) => e.key).toList()}');
             for (final entry in serverEntries) {
+              if (sessionId != _playSessionId) return;
               if (entry.key == currentServerName.value) continue;
               try {
                 logger.info('Failover → probando servidor: ${entry.key}');
@@ -783,6 +796,7 @@ class VideoPlayerController extends GetxController {
                     'Servidor "${currentServerName.value}" no disponible, '
                     'probando "${entry.key}"...';
                 final rawAlt = await runtime!.watch(entry.value);
+                if (sessionId != _playSessionId) return;
                 if (rawAlt == null) continue;
                 var alt = rawAlt as ExtensionBangumiWatch;
                 logger.info('Failover ${entry.key} URL: ${alt.url}');
@@ -795,6 +809,7 @@ class VideoPlayerController extends GetxController {
                 }
 
                 bool altWorked = await _openStream(alt.url, alt.headers);
+                if (sessionId != _playSessionId) return;
 
                 if (!altWorked &&
                     alt.headers != null &&
@@ -1074,27 +1089,12 @@ class VideoPlayerController extends GetxController {
         ),
       );
     } on DioException catch (e) {
-      if (e.type == DioExceptionType.connectionError ||
-          e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.receiveTimeout) {
-        // Red no alcanzable — notificar al usuario
-        logger.severe(e);
-        if (availableServers.length > 1) {
-          serverFailedMessage.value =
-              'Servidor "${currentServerName.value}" no disponible.\n'
-              'Cambia de servidor con el botón Servidor para ver el anime.';
-        } else {
-          serverFailedMessage.value =
-              'Servidor no disponible. Intenta más tarde.';
-        }
-      } else {
-        // HTTP 4xx/5xx: puede que libmpv lo reproduzca igual (Range headers)
-        logger.info(
-            'getQuality HTTP error ${e.response?.statusCode}, continuing');
-      }
+      // getQuality solo llena el menú manual de calidades.
+      // NO alterar serverFailedMessage para no interrumpir la reproducción en curso de ExoPlayer.
+      logger.warning('getQuality DioException (ignorado): $e');
       return;
     } catch (e) {
-      logger.severe(e);
+      logger.warning('getQuality error (ignorado): $e');
       return;
     }
 
