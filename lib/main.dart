@@ -13,6 +13,7 @@ import 'package:jiruhub/utils/jiruhub_directory.dart';
 import 'package:jiruhub/utils/request.dart';
 import 'package:jiruhub/views/pages/debug_page.dart';
 import 'package:jiruhub/views/pages/main_page.dart';
+import 'package:jiruhub/views/pages/splash_page.dart';
 import 'package:jiruhub/router/router.dart';
 import 'package:jiruhub/utils/extension.dart';
 import 'package:jiruhub/utils/i18n.dart';
@@ -138,7 +139,7 @@ class _MainAppState extends State<MainApp> {
       themeMode: c.theme,
       theme: _buildTheme(Brightness.light, cjkFontFallback),
       darkTheme: _buildTheme(Brightness.dark, cjkFontFallback),
-      home: const AndroidMainPage(),
+      home: const SplashPage(),
       localizationsDelegates: [
         I18nUtils.flutterI18nDelegate,
       ],
