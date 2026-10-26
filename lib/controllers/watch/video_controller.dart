@@ -248,7 +248,13 @@ class VideoPlayerController extends GetxController {
         await np.setProperty('demuxer-lavf-o',
             'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
       }
-      await np.setProperty('network-timeout', '20');
+      try {
+        await np.setProperty('demuxer-lavf-analyzeduration', '0.5');
+        await np.setProperty('demuxer-lavf-probesize', '131072');
+        await np.setProperty('demuxer-readahead-secs', '5');
+        await np.setProperty('cache-pause-initial', 'no');
+      } catch (_) {}
+      await np.setProperty('network-timeout', '15');
     }
     play();
 
@@ -1516,7 +1522,9 @@ class VideoPlayerController extends GetxController {
       logger.severe('URL de error recibida: $url');
       return false;
     }
-    if (!await _isHostReachable(url)) {
+    // En Linux se verifica si el host es alcanzable para prevenir el bug de SIGSEGV con EHOSTUNREACH.
+    // En Windows se omite para eliminar 1-2 segundos de latencia de red innecesaria.
+    if (Platform.isLinux && !await _isHostReachable(url)) {
       return false;
     }
 
@@ -1526,10 +1534,11 @@ class VideoPlayerController extends GetxController {
         : (Map<String, String>.from(headers)
           ..removeWhere((k, _) => k.startsWith('X-Netu-')));
 
-    // Configurar propiedades mpv ANTES de abrir el stream.
-    // 'referrer' hace que mpv reenvíe el Referer en TODAS las peticiones (incluidos
-    // segmentos .ts), no solo en la petición inicial del master.m3u8.
-    // Sin esto, VidHide CDN devuelve 403 en los segmentos aunque el master cargue bien.
+    // Configurar propiedades mpv de baja latencia ANTES de abrir el stream.
+    // - 'referrer' asegura que cada petición de fragmento .ts lleve el Referer necesario para VidHide CDN.
+    // - 'demuxer-lavf-analyzeduration 0.5' reduce la espera de análisis de 5s a 0.5s.
+    // - 'demuxer-lavf-probesize 131072' analiza solo 128KB en vez de 5MB.
+    // - 'cache-pause-initial no' arranca en cuanto el primer frame está decodificado.
     try {
       final nativePlayer = player.platform as NativePlayer;
       final referer = cleanHeaders?['Referer'] ?? cleanHeaders?['referer'];
@@ -1542,8 +1551,11 @@ class VideoPlayerController extends GetxController {
         await nativePlayer.setProperty('user-agent', ua);
         logger.info('mpv user-agent configurado');
       }
-      // Aumentar timeout de red para CDNs lentos (VidHide puede tardar >5s en primer segmento)
-      await nativePlayer.setProperty('network-timeout', '20');
+      await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '0.5');
+      await nativePlayer.setProperty('demuxer-lavf-probesize', '131072');
+      await nativePlayer.setProperty('demuxer-readahead-secs', '5');
+      await nativePlayer.setProperty('cache-pause-initial', 'no');
+      await nativePlayer.setProperty('network-timeout', '15');
     } catch (e) {
       logger.warning('No se pudieron configurar propiedades mpv: $e');
     }
@@ -1561,6 +1573,13 @@ class VideoPlayerController extends GetxController {
       if (!completer.isCompleted) completer.complete(ok);
     }
 
+    // Detección instantánea del primer frame decodificado (equivalente a onRenderedFirstFrame en ExoPlayer)
+    subs.add(player.stream.width.listen((w) {
+      if (w != null && w > 0) {
+        logger.info('_tryOpenPlayer: video renderizado ($w px) -> OK inmediato');
+        finish(true);
+      }
+    }));
     subs.add(player.stream.playing.listen((playing) {
       if (playing) {
         logger.info('_tryOpenPlayer: playing=true -> OK');
@@ -1579,13 +1598,12 @@ class VideoPlayerController extends GetxController {
         finish(true);
       }
     }));
-    // Solo fallar por error si NO hay reproducción en curso.
-    // VidHide puede emitir errores benignos en segmentos de thumbnail (403)
-    // mientras el stream principal se reproduce correctamente.
+    // Solo fallar por error si NO hay reproducción o decodificación en curso.
     subs.add(player.stream.error.listen((errMsg) {
       final alreadyPlaying = player.state.playing ||
           player.state.position.inSeconds > 0 ||
-          player.state.duration.inSeconds > 1;
+          player.state.duration.inSeconds > 1 ||
+          (player.state.width ?? 0) > 0;
       if (!alreadyPlaying) {
         logger.severe('_tryOpenPlayer error (sin reproducción activa): $errMsg');
         finish(false);
@@ -1594,22 +1612,21 @@ class VideoPlayerController extends GetxController {
       }
     }));
 
-    // 15s: suficiente para CDNs lentos como VidHide (Android usa 12s)
     var ok = await completer.future.timeout(
-      const Duration(seconds: 15),
+      const Duration(seconds: 12),
       onTimeout: () {
-        // Al expirar, verificar si mpv ya está reproduciendo de facto
-        if (player.state.playing || player.state.position.inSeconds > 0) {
+        if (player.state.playing ||
+            player.state.position.inSeconds > 0 ||
+            (player.state.width ?? 0) > 0) {
           logger.info('_tryOpenPlayer: timeout pero hay reproducción activa -> OK');
           return true;
         }
-        logger.warning('_tryOpenPlayer: timeout de 15s sin confirmación de reproducción');
+        logger.warning('_tryOpenPlayer: timeout sin confirmación de reproducción');
         return false;
       },
     );
 
-    // Verificación final con el estado RxDart del controlador
-    if (!ok && (isPlaying.value || position.value.inSeconds > 0)) {
+    if (!ok && (isPlaying.value || position.value.inSeconds > 0 || (player.state.width ?? 0) > 0)) {
       logger.info('_tryOpenPlayer: marcado OK por estado activo post-timeout');
       ok = true;
     }
