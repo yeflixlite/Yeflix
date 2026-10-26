@@ -239,10 +239,16 @@ class VideoPlayerController extends GetxController {
     // - network-timeout=5: fallo rápido
     if (player.platform is NativePlayer) {
       final np = player.platform as NativePlayer;
-      await np.setProperty('hwdec', 'no');
-      await np.setProperty('network-timeout', '5');
-      await np.setProperty(
-          'demuxer-lavf-o', 'reconnect=0,reconnect_delay_max=0');
+      if (Platform.isLinux) {
+        await np.setProperty('hwdec', 'no');
+        await np.setProperty(
+            'demuxer-lavf-o', 'reconnect=0,reconnect_delay_max=0');
+      } else {
+        await np.setProperty('hwdec', 'auto-safe');
+        await np.setProperty('demuxer-lavf-o',
+            'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
+      }
+      await np.setProperty('network-timeout', '20');
     }
     play();
 
@@ -641,12 +647,16 @@ class VideoPlayerController extends GetxController {
     player.stream.error.listen((event) {
       logger.severe('media_kit error: $event');
       sendMessage(Message(Text(event)));
-      // Si el error indica que el stream no es accesible, notificar
-      if (event.toLowerCase().contains('not found') ||
-          event.toLowerCase().contains('403') ||
-          event.toLowerCase().contains('500') ||
-          event.toLowerCase().contains('no such') ||
-          event.toLowerCase().contains('failed')) {
+      // Si el error indica que el stream no es accesible, notificar solo si no hay reproducción activa
+      final isAlreadyPlaying = player.state.playing ||
+          player.state.position.inSeconds > 0 ||
+          isPlaying.value;
+      if (!isAlreadyPlaying &&
+          (event.toLowerCase().contains('not found') ||
+              event.toLowerCase().contains('403') ||
+              event.toLowerCase().contains('500') ||
+              event.toLowerCase().contains('no such') ||
+              event.toLowerCase().contains('failed'))) {
         if (serverFailedMessage.value.isEmpty) {
           if (availableServers.length > 1) {
             serverFailedMessage.value =
@@ -1178,6 +1188,10 @@ class VideoPlayerController extends GetxController {
         ? exoPositionMs.value
         : player.state.position.inMilliseconds;
     final headers = watchData?.headers;
+    final cleanHeaders = headers == null
+        ? null
+        : (Map<String, String>.from(headers)
+          ..removeWhere((k, _) => k.startsWith('X-Netu-')));
     if (isExoPlayerActive) {
       await playExo(
         url: qualityUrl,
@@ -1185,8 +1199,19 @@ class VideoPlayerController extends GetxController {
         positionMs: currentMs,
       );
     } else {
+      try {
+        final nativePlayer = player.platform as NativePlayer;
+        final referer = cleanHeaders?['Referer'] ?? cleanHeaders?['referer'];
+        final ua = cleanHeaders?['User-Agent'] ?? cleanHeaders?['user-agent'];
+        if (referer != null && referer.isNotEmpty) {
+          await nativePlayer.setProperty('referrer', referer);
+        }
+        if (ua != null && ua.isNotEmpty) {
+          await nativePlayer.setProperty('user-agent', ua);
+        }
+      } catch (_) {}
       await player.open(
-        Media(qualityUrl, httpHeaders: headers),
+        Media(qualityUrl, httpHeaders: cleanHeaders),
       );
       final currentSecond = currentMs ~/ 1000;
       Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -1377,7 +1402,7 @@ class VideoPlayerController extends GetxController {
       final socket = await Socket.connect(
         uri.host,
         port,
-        timeout: const Duration(seconds: 4),
+        timeout: const Duration(seconds: 2),
       );
       socket.destroy();
       logger.info('Host alcanzable: ${uri.host}:$port');
@@ -1495,8 +1520,36 @@ class VideoPlayerController extends GetxController {
       return false;
     }
 
+    // Filtrar cabeceras internas (como X-Netu-Alts) para no enviarlas al CDN
+    final cleanHeaders = headers == null
+        ? null
+        : (Map<String, String>.from(headers)
+          ..removeWhere((k, _) => k.startsWith('X-Netu-')));
+
+    // Configurar propiedades mpv ANTES de abrir el stream.
+    // 'referrer' hace que mpv reenvíe el Referer en TODAS las peticiones (incluidos
+    // segmentos .ts), no solo en la petición inicial del master.m3u8.
+    // Sin esto, VidHide CDN devuelve 403 en los segmentos aunque el master cargue bien.
     try {
-      await player.open(Media(url, httpHeaders: headers));
+      final nativePlayer = player.platform as NativePlayer;
+      final referer = cleanHeaders?['Referer'] ?? cleanHeaders?['referer'];
+      final ua = cleanHeaders?['User-Agent'] ?? cleanHeaders?['user-agent'];
+      if (referer != null && referer.isNotEmpty) {
+        await nativePlayer.setProperty('referrer', referer);
+        logger.info('mpv referrer configurado: $referer');
+      }
+      if (ua != null && ua.isNotEmpty) {
+        await nativePlayer.setProperty('user-agent', ua);
+        logger.info('mpv user-agent configurado');
+      }
+      // Aumentar timeout de red para CDNs lentos (VidHide puede tardar >5s en primer segmento)
+      await nativePlayer.setProperty('network-timeout', '20');
+    } catch (e) {
+      logger.warning('No se pudieron configurar propiedades mpv: $e');
+    }
+
+    try {
+      await player.open(Media(url, httpHeaders: cleanHeaders));
     } catch (e) {
       logger.severe('player.open error: $e');
       return false;
@@ -1509,22 +1562,55 @@ class VideoPlayerController extends GetxController {
     }
 
     subs.add(player.stream.playing.listen((playing) {
-      if (playing) finish(true);
+      if (playing) {
+        logger.info('_tryOpenPlayer: playing=true -> OK');
+        finish(true);
+      }
     }));
     subs.add(player.stream.duration.listen((d) {
-      if (d > const Duration(seconds: 1)) finish(true);
+      if (d > const Duration(seconds: 1)) {
+        logger.info('_tryOpenPlayer: duration=${d.inSeconds}s -> OK');
+        finish(true);
+      }
     }));
     subs.add(player.stream.position.listen((p) {
-      if (p.inSeconds > 0) finish(true);
+      if (p.inSeconds > 0) {
+        logger.info('_tryOpenPlayer: position=${p.inSeconds}s -> OK');
+        finish(true);
+      }
     }));
-    subs.add(player.stream.error.listen((_) => finish(false)));
+    // Solo fallar por error si NO hay reproducción en curso.
+    // VidHide puede emitir errores benignos en segmentos de thumbnail (403)
+    // mientras el stream principal se reproduce correctamente.
+    subs.add(player.stream.error.listen((errMsg) {
+      final alreadyPlaying = player.state.playing ||
+          player.state.position.inSeconds > 0 ||
+          player.state.duration.inSeconds > 1;
+      if (!alreadyPlaying) {
+        logger.severe('_tryOpenPlayer error (sin reproducción activa): $errMsg');
+        finish(false);
+      } else {
+        logger.warning('_tryOpenPlayer error ignorado (reproducción activa): $errMsg');
+      }
+    }));
 
+    // 15s: suficiente para CDNs lentos como VidHide (Android usa 12s)
     var ok = await completer.future.timeout(
-      const Duration(seconds: 5),
-      onTimeout: () => false,
+      const Duration(seconds: 15),
+      onTimeout: () {
+        // Al expirar, verificar si mpv ya está reproduciendo de facto
+        if (player.state.playing || player.state.position.inSeconds > 0) {
+          logger.info('_tryOpenPlayer: timeout pero hay reproducción activa -> OK');
+          return true;
+        }
+        logger.warning('_tryOpenPlayer: timeout de 15s sin confirmación de reproducción');
+        return false;
+      },
     );
 
+    // Verificación final con el estado RxDart del controlador
     if (!ok && (isPlaying.value || position.value.inSeconds > 0)) {
+      logger.info('_tryOpenPlayer: marcado OK por estado activo post-timeout');
       ok = true;
     }
 

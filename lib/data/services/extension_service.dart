@@ -47,7 +47,7 @@ class ExtensionService {
     if (Platform.isAndroid) {
       runtime = QuickJsRuntime2(stackSize: 1024 * 1024);
     } else if (Platform.isWindows) {
-      runtime = QuickJsRuntime2();
+      runtime = QuickJsRuntime2(stackSize: 1024 * 1024);
     } else if (Platform.isLinux) {
       runtime = JavascriptCoreRuntime();
     } else {
