@@ -684,6 +684,10 @@ class VideoPlayerController extends GetxController {
       return;
     }
     final sessionId = ++_playSessionId;
+    // ── TIMING DIAGNÓSTICO ─────────────────────────────────────────────────
+    final _t0 = DateTime.now();
+    logger.info('⏱ [T+0ms] play() iniciado');
+    // ───────────────────────────────────────────────────────────────────────
     player.stop();
     isGettingWatchData.value = true;
     error.value = '';
@@ -719,6 +723,7 @@ class VideoPlayerController extends GetxController {
       return;
     }
 
+    logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] getWatchData() START (runtime.watch)');
     try {
       await getWatchData();
     } catch (e) {
@@ -729,6 +734,8 @@ class VideoPlayerController extends GetxController {
       isGettingWatchData.value = false;
       return;
     }
+    final _urlPreview = (watchData?.url ?? '').substring(0, (watchData?.url?.length ?? 0).clamp(0, 80));
+    logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] getWatchData() END — url: $_urlPreview');
 
     if (sessionId != _playSessionId) return;
 
@@ -758,9 +765,11 @@ class VideoPlayerController extends GetxController {
           final primaryUrl = watchData!.url;
           unawaited(getQuality());
 
+          logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() START — servidor: ${currentServerName.value}');
           logger.info(
               'Intentando servidor primario: ${currentServerName.value} → $primaryUrl');
           bool worked = await _openStream(primaryUrl, watchData!.headers);
+          logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() END — worked=$worked');
           if (sessionId != _playSessionId) return;
 
           if (!worked &&
@@ -955,7 +964,10 @@ class VideoPlayerController extends GetxController {
     serverReferers.clear();
     serverFailedMessage.value = '';
     final playUrl = playList[index.value].url;
+    final _tw0 = DateTime.now();
+    logger.info('⏱ [watch] runtime.watch() START → $playUrl');
     final res = await runtime!.watch(playUrl);
+    logger.info('⏱ [watch] runtime.watch() DONE — ${DateTime.now().difference(_tw0).inMilliseconds}ms — resultado: ${res == null ? 'null' : 'ok'}');
     if (res == null) {
       throw 'No se pudo obtener información del video.';
     }
@@ -1518,6 +1530,9 @@ class VideoPlayerController extends GetxController {
   // Intenta abrir el player con la URL dada.
   // Retorna true solo si el stream REALMENTE empieza a reproducirse.
   Future<bool> _tryOpenPlayer(String url, Map<String, String>? headers) async {
+    final _tp0 = DateTime.now();
+    logger.info('⏱ [player+0ms] _tryOpenPlayer START');
+
     if (url.startsWith('error://')) {
       logger.severe('URL de error recibida: $url');
       return false;
@@ -1556,12 +1571,15 @@ class VideoPlayerController extends GetxController {
       await nativePlayer.setProperty('demuxer-readahead-secs', '5');
       await nativePlayer.setProperty('cache-pause-initial', 'no');
       await nativePlayer.setProperty('network-timeout', '15');
+      logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] mpv props set');
     } catch (e) {
       logger.warning('No se pudieron configurar propiedades mpv: $e');
     }
 
     try {
+      logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() START');
       await player.open(Media(url, httpHeaders: cleanHeaders));
+      logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() RETURNED (stream abierto, esperando playback)');
     } catch (e) {
       logger.severe('player.open error: $e');
       return false;
@@ -1576,25 +1594,25 @@ class VideoPlayerController extends GetxController {
     // Detección instantánea del primer frame decodificado (equivalente a onRenderedFirstFrame en ExoPlayer)
     subs.add(player.stream.width.listen((w) {
       if (w != null && w > 0) {
-        logger.info('_tryOpenPlayer: video renderizado ($w px) -> OK inmediato');
+        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] primer frame renderizado ($w px) -> OK');
         finish(true);
       }
     }));
     subs.add(player.stream.playing.listen((playing) {
       if (playing) {
-        logger.info('_tryOpenPlayer: playing=true -> OK');
+        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] playing=true -> OK');
         finish(true);
       }
     }));
     subs.add(player.stream.duration.listen((d) {
       if (d > const Duration(seconds: 1)) {
-        logger.info('_tryOpenPlayer: duration=${d.inSeconds}s -> OK');
+        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] duration=${d.inSeconds}s -> OK');
         finish(true);
       }
     }));
     subs.add(player.stream.position.listen((p) {
       if (p.inSeconds > 0) {
-        logger.info('_tryOpenPlayer: position=${p.inSeconds}s -> OK');
+        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] position=${p.inSeconds}s -> OK');
         finish(true);
       }
     }));
@@ -1605,7 +1623,7 @@ class VideoPlayerController extends GetxController {
           player.state.duration.inSeconds > 1 ||
           (player.state.width ?? 0) > 0;
       if (!alreadyPlaying) {
-        logger.severe('_tryOpenPlayer error (sin reproducción activa): $errMsg');
+        logger.severe('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] error sin reproducción activa: $errMsg');
         finish(false);
       } else {
         logger.warning('_tryOpenPlayer error ignorado (reproducción activa): $errMsg');
@@ -1618,10 +1636,10 @@ class VideoPlayerController extends GetxController {
         if (player.state.playing ||
             player.state.position.inSeconds > 0 ||
             (player.state.width ?? 0) > 0) {
-          logger.info('_tryOpenPlayer: timeout pero hay reproducción activa -> OK');
+          logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] timeout pero reproducción activa -> OK');
           return true;
         }
-        logger.warning('_tryOpenPlayer: timeout sin confirmación de reproducción');
+        logger.warning('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] TIMEOUT sin reproducción — FALLO');
         return false;
       },
     );
@@ -1634,6 +1652,8 @@ class VideoPlayerController extends GetxController {
     for (final sub in subs) {
       await sub.cancel();
     }
+
+    logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] _tryOpenPlayer END — ok=$ok');
 
     if (ok) {
       error.value = '';

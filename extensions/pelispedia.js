@@ -393,7 +393,7 @@ export default class extends Extension {
     for (const s of list) {
       let r = null;
       try {
-        r = await this.limit(this.resolveEmbed(s.url, referer), 4500, null);
+        r = await this.limit(this.resolveEmbed(s.url, referer), 4000, null);
       } catch (_) {
         r = null;
       }

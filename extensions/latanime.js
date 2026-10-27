@@ -30,11 +30,12 @@ const UA =
 
 // Byse/Filemoon resuelven el video por API (respuesta cifrada AES-256-GCM).
 const BYSE_RE =
-  /(bysekoze|bysesukior|bysejikuar|byse\.(sx|com|to)|filemoon\.|filemooon|moonplayer|398fitus)/i;
+  /(byse[a-z0-9]*\.|filemoon\.|filemooon|moonplayer|398fitus)/i;
 // VOE ofusca su configuracion en un <script type="application/json">.
 const VOE_RE =
-  /(voe\.sx|v-?o-?e\.|voe-video|johnfullwonder|charlestoughrace|derricknationtop|timmaybealready|richardquestionbuilding|nicolehappyoutside|rebeccapracticeloss|jenniferperformer|reitshof)/i;
+  /(voe\.sx|v-?o-?e\.|voe-video|johnfullwonder|charlestoughrace|derricknationtop|timmaybealready|richardquestionbuilding|nicolehappyoutside|rebeccapracticeloss|jenniferperformer|reitshof|ashleyhardat)/i;
 const VOE_MIRRORS = [
+  "ashleyhardat.com",
   "derricknationtop.com",
   "johnfullwonder.com",
   "charlestoughrace.com",
@@ -200,8 +201,13 @@ export default class extends Extension {
     // Primario: probar primero los hosts mas fiables (mp4upload, mixdrop, ...).
     const ordered = servers.slice().sort((a, b) => this.rankHost(a.url) - this.rankHost(b.url));
     for (const s of ordered) {
-      const r = await this.resolveEmbed(s.url, full);
-      if (r && r.url) {
+      let r = null;
+      try {
+        r = await this.limit(this.resolveEmbed(s.url, full), 3500, null);
+      } catch (_) {
+        r = null;
+      }
+      if (r && r.url && !String(r.url).startsWith("error://")) {
         r.headers = Object.assign({}, r.headers, extra, { "X-Primary-Server": s.name });
         return r;
       }
@@ -212,6 +218,36 @@ export default class extends Extension {
 
   err(msg) {
     return { type: "hls", url: "error://" + msg };
+  }
+
+  limit(p, ms, fallback) {
+    const done = Promise.resolve(p).catch(() => fallback);
+    if (typeof setTimeout !== "function") return done;
+    return Promise.race([
+      done,
+      new Promise((res) => setTimeout(() => res(fallback), ms)),
+    ]);
+  }
+
+  swFirst(tasks) {
+    return new Promise((resolve) => {
+      let pending = tasks.length;
+      let done = false;
+      if (!pending) return resolve(null);
+      for (const t of tasks) {
+        Promise.resolve(t)
+          .then((r) => {
+            if (!done && r) {
+              done = true;
+              resolve(r);
+            }
+          }, () => {})
+          .then(() => {
+            pending--;
+            if (!pending && !done) resolve(null);
+          });
+      }
+    });
   }
 
   // Una URL "embed" (de terceros) frente a una pagina /ver del sitio.
@@ -226,13 +262,13 @@ export default class extends Extension {
   // mixdrop va primero: mp4upload usa el puerto 183 y suele dar timeout/403.
   // Prioridad de servidores. byse primero y voe como respaldo automatico.
   rankHost(u) {
-    const h = (u.match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
+    const h = (String(u || "").match(/^https?:\/\/([^\/]+)/i) || ["", ""])[1].toLowerCase();
     if (h.indexOf("byse") !== -1 || h.indexOf("filemoon") !== -1) return 0;
-    if (h.indexOf("voe") !== -1 || h.indexOf("derricknationtop") !== -1) return 1;
+    if (h.indexOf("voe") !== -1 || h.indexOf("derricknationtop") !== -1 || h.indexOf("ashleyhardat") !== -1) return 1;
     if (h.indexOf("mixdrop") !== -1 || h.indexOf("mxdrop") !== -1) return 2;
     if (h.indexOf("mp4upload") !== -1) return 3;
     if (h.indexOf("dood") !== -1 || h.indexOf("playmogo") !== -1 || h.indexOf("ds2") !== -1) return 4;
-    return 5;
+    return 9;
   }
 
   // Lista de servidores desde los botones data-player (base64).
