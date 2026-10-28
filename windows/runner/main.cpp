@@ -28,8 +28,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
-  // FORZAR consola siempre para ver logs de timing
-  if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
+  // No se crea consola al abrir la app normalmente: el usuario solo debe ver
+  // la ventana de Yeflix. Los logs se guardan en Documents\jiruhub\jiruhub.log.
+  if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
     CreateAndAttachConsole();
   }
 

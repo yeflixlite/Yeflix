@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Yeflix"
-#define MyAppVersion "1.0.4"
+#define MyAppVersion "1.0.5"
 #define MyAppPublisher "Yeflix"
 #define MyAppURL "https://github.com/jephersonRD/JiruHub"
 #define MyAppExeName "yeflix.exe"
@@ -24,7 +24,7 @@ DisableProgramGroupPage=yes
 ; Uncomment the following line to run in non administrative install mode (install for current user only.)
 ;PrivilegesRequired=lowest
 OutputDir=..\APKs
-OutputBaseFilename=Yeflix-v1.0.4-Windows-Installer
+OutputBaseFilename=Yeflix-v1.0.5-Windows-Installer
 SetupIconFile=.\windows\runner\resources\app_icon.ico
 Compression=lzma
 SolidCompression=yes

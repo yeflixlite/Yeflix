@@ -464,6 +464,11 @@ class VideoPlayerController extends GetxController {
     } catch (e) {
       logger.severe('player.dispose error: $e');
     }
+    try {
+      await _hlsServer?.close(force: true);
+    } catch (_) {}
+    _hlsServer = null;
+    _hlsPlaylistBody = null;
     logger.info('dispose video controller');
     super.onClose();
   }
@@ -1548,10 +1553,50 @@ class VideoPlayerController extends GetxController {
     }
   }
 
-  /// Descarga el playlist HLS (maestro + media) con gzip y escribe un playlist
-  /// local con URLs absolutas. FFmpeg descarga el playlist VOD completo
-  /// (~156 KB) sin comprimir antes de abrir el primer segmento; con gzip son
-  /// ~2.5 KB. Devuelve null si no es seguro/aplicable (live, cifrado, error).
+  /// Servidor HTTP en loopback que entrega el playlist HLS prefetcheado.
+  ///
+  /// No se puede entregar como archivo local: el demuxer HLS de FFmpeg lee
+  /// solo el primer segmento de un playlist en disco y termina la
+  /// reproducción al llegar a su final. Servido por HTTP funciona igual que
+  /// el playlist remoto, pero sin descargar los ~156 KB sin comprimir.
+  HttpServer? _hlsServer;
+  String? _hlsPlaylistBody;
+
+  /// Publica [body] en el servidor loopback y devuelve la URL para mpv.
+  Future<String?> _serveHlsPlaylist(String body) async {
+    try {
+      _hlsPlaylistBody = body;
+      var server = _hlsServer;
+      if (server == null) {
+        server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        _hlsServer = server;
+        server.listen((request) async {
+          final response = request.response;
+          final playlist = _hlsPlaylistBody;
+          if (playlist == null) {
+            response.statusCode = HttpStatus.notFound;
+            await response.close();
+            return;
+          }
+          response.headers.contentType =
+              ContentType('application', 'vnd.apple.mpegurl');
+          response.headers.set('Access-Control-Allow-Origin', '*');
+          response.write(playlist);
+          await response.close();
+        });
+      }
+      return 'http://127.0.0.1:${server.port}/playlist.m3u8';
+    } catch (e) {
+      logger.warning('Servidor HLS local no disponible: $e');
+      return null;
+    }
+  }
+
+  /// Descarga el playlist HLS (maestro + media) con gzip y lo publica en un
+  /// servidor loopback con URLs absolutas. FFmpeg descarga el playlist VOD
+  /// completo (~156 KB) sin comprimir antes de abrir el primer segmento; con
+  /// gzip son ~2.5 KB. Devuelve null si no es seguro/aplicable (live,
+  /// cifrado, error).
   Future<String?> _prefetchHlsPlaylist(
     String url,
     Map<String, String>? headers,
@@ -1635,21 +1680,11 @@ class VideoPlayerController extends GetxController {
       final dir = Directory(
         path.join(JiruHubDirectory.getCacheDirectory, 'hls_prefetch'),
       );
-      dir.createSync(recursive: true);
-      // Limpieza best-effort de playlists antiguas.
+      // Los playlists de versiones anteriores se escribían en disco.
       try {
-        final cutoff = DateTime.now().subtract(const Duration(hours: 1));
-        for (final f in dir.listSync()) {
-          if (f is File && f.statSync().modified.isBefore(cutoff)) {
-            f.deleteSync();
-          }
-        }
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
       } catch (_) {}
-      final file = File(
-        path.join(dir.path, 'pl_${DateTime.now().microsecondsSinceEpoch}.m3u8'),
-      );
-      file.writeAsStringSync(out.join('\n'));
-      return file.path;
+      return await _serveHlsPlaylist(out.join('\n'));
     } catch (e) {
       logger.warning('HLS prefetch falló (se usará URL original): $e');
       return null;
@@ -1702,11 +1737,12 @@ class VideoPlayerController extends GetxController {
       await nativePlayer.setProperty('demuxer-lavf-o', 'reconnect=0');
       await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '1.0');
       await nativePlayer.setProperty('demuxer-lavf-probesize', '1048576');
-      await nativePlayer.setProperty('demuxer-readahead-secs', '0.5');
+      await nativePlayer.setProperty('demuxer-readahead-secs', '30');
       await nativePlayer.setProperty('cache-pause-initial', 'no');
       await nativePlayer.setProperty('network-timeout', '30');
-      // HLS: buffering inicial agresivo para primer frame rápido
-      await nativePlayer.setProperty('cache-secs', '10');
+      // Buffer amplio: con valores bajos (10s) el demuxer se queda sin datos
+      // justo en cada cambio de segmento y la reproducción se detiene.
+      await nativePlayer.setProperty('cache-secs', '60');
       // Forzar selección de calidad más baja inicialmente para arranque rápido
       await nativePlayer.setProperty('hls-bitrate', 'min');
       logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] mpv props set');
