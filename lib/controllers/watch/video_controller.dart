@@ -221,12 +221,19 @@ class VideoPlayerController extends GetxController {
   @override
   void onInit() async {
     if (Platform.isAndroid) {
-      // 切换到横屏
-      SystemChrome.setPreferredOrientations(
-        [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight],
-      );
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      await AutoOrientation.landscapeAutoMode(forceSensor: true);
+      if (LayoutUtils.isTablet) {
+        // Tablet: la app sigue la rotación física del dispositivo (vertical u
+        // horizontal) y respeta el bloqueo de giro del sistema.
+        await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+        await AutoOrientation.setScreenOrientationUser();
+      } else {
+        // Teléfono: se mantiene el video en horizontal.
+        SystemChrome.setPreferredOrientations(
+          [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight],
+        );
+        await AutoOrientation.landscapeAutoMode(forceSensor: true);
+      }
     }
     _initSettings();
     _initPlayer();
@@ -438,9 +445,12 @@ class VideoPlayerController extends GetxController {
       SystemChrome.setEnabledSystemUIMode(
         SystemUiMode.edgeToEdge,
       );
-      // 如果是平板则不改变
-      // 切换回竖屏
-      if (!LayoutUtils.isTablet) {
+      if (LayoutUtils.isTablet) {
+        // Tablet: vuelve a seguir la rotación del dispositivo.
+        await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+        await AutoOrientation.setScreenOrientationUser();
+      } else {
+        // Teléfono: vuelve a vertical.
         SystemChrome.setPreferredOrientations([
           DeviceOrientation.portraitUp,
           DeviceOrientation.portraitDown,

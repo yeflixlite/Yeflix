@@ -15,7 +15,21 @@ class LayoutUtils {
   }
 
   // 是否是平板
+  //
+  // Se usa el lado corto de la pantalla (>= 600 dp) en vez del ancho: así el
+  // resultado no cambia al girar el dispositivo y una tablet en vertical sigue
+  // usando la interfaz de tablet.
   static bool get isTablet {
-    return _isTablet ??= width > 800;
+    final cached = _isTablet;
+    if (cached != null) {
+      return cached;
+    }
+    try {
+      final size = MediaQuery.of(currentContext).size;
+      return _isTablet = size.shortestSide >= 600;
+    } catch (_) {
+      // Sin contexto todavía: se reintenta en la siguiente llamada.
+      return false;
+    }
   }
 }
