@@ -216,8 +216,8 @@ class _AndroidMainPageState extends fluent.State<AndroidMainPage> {
   void initState() {
     c = Get.put(MainController());
     // Aviso de actualización al abrir (solo si realmente hay una más nueva).
-    // Se retrasa para que la primera pantalla termine de montarse.
-    Future.delayed(const Duration(seconds: 3), () {
+    // Se retrasa un poco para que la primera pantalla termine de montarse.
+    Future.delayed(const Duration(seconds: 2), () {
       if (mounted) ApplicationUtils.checkUpdate(context);
     });
     super.initState();

@@ -17,6 +17,7 @@ import 'package:jiruhub/views/widgets/messenger.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:dio/dio.dart';
 
 late PackageInfo packageInfo;
 late AndroidDeviceInfo androidDeviceInfo;
@@ -61,10 +62,17 @@ class ApplicationUtils {
   }
 
   static checkUpdate(BuildContext context, {bool showSnackbar = false}) async {
+    final dioWithTimeout = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 30),
+      ),
+    );
+
     try {
       const url =
           "https://api.github.com/repos/yeflixlite/Yeflix/releases/latest";
-      final res = await dio.get(url);
+      final res = await dioWithTimeout.get(url);
       final data = res.data as Map;
       final tagName = data["tag_name"] as String;
       final remoteVersion = tagName.replaceFirst('v', '');
@@ -143,14 +151,20 @@ class ApplicationUtils {
         );
       }
     } catch (e) {
-      if (!showSnackbar) {
-        return;
+      if (context.mounted) {
+        showPlatformSnackbar(
+          context: context,
+          title: 'upgrade.check-update'.i18n,
+          content: 'upgrade.error'.i18n,
+          action: TextButton(
+            child: Text('Reintentar'.i18n),
+            onPressed: () {
+              ApplicationUtils.checkUpdate(context);
+            },
+          ),
+        );
       }
-      showPlatformSnackbar(
-        context: context,
-        title: 'upgrade.check-update'.i18n,
-        content: 'upgrade.error'.i18n,
-      );
+      return;
     }
   }
 
