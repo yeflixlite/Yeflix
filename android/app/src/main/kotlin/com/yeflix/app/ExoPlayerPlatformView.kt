@@ -1,8 +1,11 @@
 package com.yeflix.app
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
 import android.view.View
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -60,6 +63,56 @@ class ExoPlayerPlatformView(
     private val channel = MethodChannel(messenger, channelName)
     private var released = false
 
+    // Mantiene la pantalla encendida mientras el video se está reproduciendo.
+    // El contexto de una PlatformView es el de la Activity, pero se recorre la
+    // cadena de ContextWrapper por si Flutter entrega un contexto envoltorio.
+    private val hostActivity: Activity? = findActivity(context)
+    private var keepScreenOn = false
+
+    private fun findActivity(ctx: Context): Activity? {
+        var current: Context? = ctx
+        while (current is ContextWrapper) {
+            if (current is Activity) return current
+            current = current.baseContext
+        }
+        return current as? Activity
+    }
+
+    /**
+     * Activa o desactiva FLAG_KEEP_SCREEN_ON en la ventana de la Activity.
+     *
+     * Se usa el flag de ventana (y no solo `View.keepScreenOn`) porque la vista
+     * del reproductor se dibuja dentro de una PlatformView de Flutter y su flag
+     * no siempre llega a la ventana. Con el flag en la ventana el sistema no
+     * apaga la pantalla por inactividad mientras se reproduce el video.
+     */
+    private fun setKeepScreenOn(enabled: Boolean) {
+        if (keepScreenOn == enabled) return
+        keepScreenOn = enabled
+        playerView.keepScreenOn = enabled
+        container.keepScreenOn = enabled
+        val activity = hostActivity ?: return
+        activity.runOnUiThread {
+            if (enabled) {
+                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    /**
+     * Decide si la pantalla debe permanecer encendida: sí mientras el usuario
+     * quiere reproducir (playWhenReady) y el reproductor está listo o cargando.
+     * Al pausar, al terminar o al cerrar el reproductor se libera el flag.
+     */
+    private fun updateKeepScreenOn() {
+        val state = player.playbackState
+        val active = player.playWhenReady &&
+            (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
+        setKeepScreenOn(active)
+    }
+
     init {
         playerView.player = player
         channel.setMethodCallHandler(this)
@@ -102,6 +155,7 @@ class ExoPlayerPlatformView(
                     }
                     player.prepare()
                     player.playWhenReady = true
+                    updateKeepScreenOn()
                     result.success(null)
                 } catch (t: Throwable) {
                     val msg = t.message ?: t.javaClass.simpleName
@@ -111,10 +165,12 @@ class ExoPlayerPlatformView(
             }
             "play" -> {
                 player.playWhenReady = true
+                updateKeepScreenOn()
                 result.success(null)
             }
             "pause" -> {
                 player.playWhenReady = false
+                setKeepScreenOn(false)
                 result.success(null)
             }
             "seek" -> {
@@ -184,6 +240,7 @@ class ExoPlayerPlatformView(
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
+        updateKeepScreenOn()
         channel.invokeMethod(
             "onStateChanged",
             mapOf(
@@ -195,6 +252,7 @@ class ExoPlayerPlatformView(
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
+        updateKeepScreenOn()
         channel.invokeMethod("onIsPlayingChanged", isPlaying)
         channel.invokeMethod(
             "onStateChanged",
@@ -207,6 +265,7 @@ class ExoPlayerPlatformView(
     }
 
     override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
+        updateKeepScreenOn()
         channel.invokeMethod(
             "onStateChanged",
             mapOf(
@@ -215,6 +274,11 @@ class ExoPlayerPlatformView(
                 "isPlaying" to player.isPlaying
             )
         )
+    }
+
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        // Cubre pausar/reanudar sin cambio de estado de reproducción.
+        updateKeepScreenOn()
     }
 
     override fun onPositionDiscontinuity(
@@ -244,6 +308,7 @@ class ExoPlayerPlatformView(
     private fun release() {
         if (released) return
         released = true
+        setKeepScreenOn(false)
         player.removeListener(this)
         player.release()
         channel.setMethodCallHandler(null)
