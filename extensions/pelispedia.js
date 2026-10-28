@@ -390,22 +390,30 @@ export default class extends Extension {
     for (const s of list) headers[s.label] = s.url;
 
     const failures = [];
-    for (const s of list) {
-      let r = null;
-      try {
-        r = await this.limit(this.resolveEmbed(s.url, referer), 4000, null);
-      } catch (_) {
-        r = null;
-      }
+    const startResolve = Date.now();
+    const GLOBAL_BUDGET = 6000;
+    // Intentar en paralelo con presupuesto global para evitar esperas secuenciales
+    const attempts = list.map((s) => {
+      const p = this.resolveEmbed(s.url, referer)
+        .then((r) => ({ s, r }))
+        .catch(() => ({ s, r: null }));
+      return this.limit(p, Math.max(1500, GLOBAL_BUDGET - (Date.now() - startResolve)), { s, r: null });
+    });
+    const results = await Promise.race([
+      Promise.all(attempts),
+      new Promise((res) => setTimeout(() => res([]), GLOBAL_BUDGET))
+    ]);
+    for (const item of results || []) {
+      const r = item && item.r;
       if (!r || !r.url || String(r.url).startsWith("error://")) {
         if (this._lastResolveError) {
-          failures.push(s.label + ": " + this._lastResolveError);
+          failures.push((item.s?.label || "?") + ": " + this._lastResolveError);
         }
         continue;
       }
       r.headers = Object.assign({}, r.headers || {}, {
         "X-Servers": JSON.stringify(headers),
-        "X-Primary-Server": s.label,
+        "X-Primary-Server": item.s.label,
         "X-Language": this.e69LangName(g.lang),
       });
       return r;
@@ -1017,7 +1025,7 @@ export default class extends Extension {
         typeof setTimeout === "function"
           ? await Promise.race([
               req,
-              new Promise((res) => setTimeout(() => res(""), 3500)),
+              new Promise((res) => setTimeout(() => res(""), 2000),
             ])
           : await req;
     } catch (_) {

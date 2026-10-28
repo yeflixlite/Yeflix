@@ -245,16 +245,20 @@ class VideoPlayerController extends GetxController {
             'demuxer-lavf-o', 'reconnect=0,reconnect_delay_max=0');
       } else {
         await np.setProperty('hwdec', 'auto-safe');
+        // REVISIÓN: Aumentar timeouts para evitar fallos de conexión en streams iniciales
+        // en Windows/Mac, pero mantener cortos para fallover.
         await np.setProperty('demuxer-lavf-o',
             'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
       }
       try {
-        await np.setProperty('demuxer-lavf-analyzeduration', '0.5');
-        await np.setProperty('demuxer-lavf-probesize', '131072');
-        await np.setProperty('demuxer-readahead-secs', '5');
+        // Reducir la latencia de análisis inicial para acelerar el primer frame
+        await np.setProperty('demuxer-lavf-analyzeduration', '0.2');
+        await np.setProperty('demuxer-lavf-probesize', '65536');
+        await np.setProperty('demuxer-readahead-secs', '2');
         await np.setProperty('cache-pause-initial', 'no');
       } catch (_) {}
-      await np.setProperty('network-timeout', '15');
+      // Timeout incrementado ligeramente si la red es inestable
+      await np.setProperty('network-timeout', '10');
     }
     play();
 
@@ -686,7 +690,7 @@ class VideoPlayerController extends GetxController {
     final sessionId = ++_playSessionId;
     // ── TIMING DIAGNÓSTICO ─────────────────────────────────────────────────
     final _t0 = DateTime.now();
-    logger.info('⏱ [T+0ms] play() iniciado');
+    logger.info('⏱ [T+0ms] play() iniciado para index: ${index.value}');
     // ───────────────────────────────────────────────────────────────────────
     player.stop();
     isGettingWatchData.value = true;
@@ -763,12 +767,16 @@ class VideoPlayerController extends GetxController {
           await dlnaDevice.value!.play();
         } else {
           final primaryUrl = watchData!.url;
-          unawaited(getQuality());
 
           logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() START — servidor: ${currentServerName.value}');
-          logger.info(
-              'Intentando servidor primario: ${currentServerName.value} → $primaryUrl');
+          logger.info('   URL: $primaryUrl');
+          logger.info('   Headers: ${watchData!.headers}');
           bool worked = await _openStream(primaryUrl, watchData!.headers);
+          
+          if (worked) {
+            // Solo si el video ya arrancó, cargamos la lista de calidades en background
+            unawaited(getQuality());
+          }
           logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() END — worked=$worked');
           if (sessionId != _playSessionId) return;
 
@@ -812,7 +820,7 @@ class VideoPlayerController extends GetxController {
                 <String, String>{}; // Para registrar errores por servidor
             logger.info(
                 'Servidores disponibles para failover: ${serverEntries.map((e) => e.key).toList()}');
-            for (final entry in serverEntries) {
+            for (final entry in serverEntries.take(3)) {
               if (sessionId != _playSessionId) return;
               if (entry.key == currentServerName.value) continue;
               try {
@@ -1566,11 +1574,11 @@ class VideoPlayerController extends GetxController {
         await nativePlayer.setProperty('user-agent', ua);
         logger.info('mpv user-agent configurado');
       }
-      await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '0.5');
-      await nativePlayer.setProperty('demuxer-lavf-probesize', '131072');
-      await nativePlayer.setProperty('demuxer-readahead-secs', '5');
+      await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '0.2');
+      await nativePlayer.setProperty('demuxer-lavf-probesize', '65536');
+      await nativePlayer.setProperty('demuxer-readahead-secs', '2');
       await nativePlayer.setProperty('cache-pause-initial', 'no');
-      await nativePlayer.setProperty('network-timeout', '15');
+      await nativePlayer.setProperty('network-timeout', '5');
       logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] mpv props set');
     } catch (e) {
       logger.warning('No se pudieron configurar propiedades mpv: $e');
@@ -1630,19 +1638,19 @@ class VideoPlayerController extends GetxController {
       }
     }));
 
-    var ok = await completer.future.timeout(
-      const Duration(seconds: 12),
-      onTimeout: () {
-        if (player.state.playing ||
-            player.state.position.inSeconds > 0 ||
-            (player.state.width ?? 0) > 0) {
-          logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] timeout pero reproducción activa -> OK');
-          return true;
-        }
-        logger.warning('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] TIMEOUT sin reproducción — FALLO');
-        return false;
-      },
-    );
+      var ok = await completer.future.timeout(
+        const Duration(seconds: 8),
+        onTimeout: () {
+          if (player.state.playing ||
+              player.state.position.inSeconds > 0 ||
+              (player.state.width ?? 0) > 0) {
+            logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] timeout pero reproducción activa -> OK');
+            return true;
+          }
+          logger.warning('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] TIMEOUT sin reproducción — FALLO');
+          return false;
+        },
+      );
 
     if (!ok && (isPlaying.value || position.value.inSeconds > 0 || (player.state.width ?? 0) > 0)) {
       logger.info('_tryOpenPlayer: marcado OK por estado activo post-timeout');
