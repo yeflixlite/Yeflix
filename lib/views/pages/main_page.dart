@@ -11,7 +11,6 @@ import 'package:jiruhub/controllers/main_controller.dart';
 import 'package:jiruhub/views/pages/search/search_page.dart';
 import 'package:jiruhub/views/pages/settings/settings_page.dart';
 import 'package:jiruhub/router/router.dart';
-import 'package:jiruhub/utils/application.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/layout.dart';
 import 'package:jiruhub/utils/jiruhub_storage.dart';
@@ -40,9 +39,8 @@ class _DesktopMainPageState extends State<DesktopMainPage> with WindowListener {
   @override
   void initState() {
     c = Get.put(MainController());
-    if (JiruHubStorage.getSetting(SettingKey.autoCheckUpdate)) {
-      ApplicationUtils.checkUpdate(context);
-    }
+    // La comprobación de actualizaciones es manual desde Ajustes: no se
+    // muestra ningún aviso automático al abrir la app.
     windowManager.addListener(this);
     super.initState();
   }
@@ -216,9 +214,7 @@ class _AndroidMainPageState extends fluent.State<AndroidMainPage> {
   @override
   void initState() {
     c = Get.put(MainController());
-    if (JiruHubStorage.getSetting(SettingKey.autoCheckUpdate)) {
-      ApplicationUtils.checkUpdate(context);
-    }
+    // Sin aviso automático de actualizaciones al abrir la app.
     super.initState();
   }
 

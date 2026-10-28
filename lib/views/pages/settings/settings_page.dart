@@ -138,16 +138,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 return Get.find<ApplicationController>().themeText.value;
               },
             ),
-            // 启动检查更新
-            SettingsSwitchTile(
-              title: 'settings.auto-check-update'.i18n,
-              buildSubtitle: () => 'settings.auto-check-update-subtitle'.i18n,
-              buildValue: () =>
-                  JiruHubStorage.getSetting(SettingKey.autoCheckUpdate),
-              onChanged: (value) {
-                JiruHubStorage.setSetting(SettingKey.autoCheckUpdate, value);
-              },
-            ),
+            // La comprobación de actualizaciones es manual (ver Ajustes).
             // NSFW
             SettingsSwitchTile(
               title: 'settings.nsfw'.i18n,

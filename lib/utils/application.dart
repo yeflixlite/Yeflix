@@ -40,6 +40,22 @@ class ApplicationUtils {
   static String get _platformSuffix =>
       Platform.isWindows ? 'windows.zip' : 'linux.tar.gz';
 
+  /// Compara versiones tipo "1.0.5" ignorando sufijos no numéricos.
+  static bool _isNewer(String remote, String local) {
+    List<int> parse(String v) => v
+        .split('.')
+        .map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+    final r = parse(remote);
+    final l = parse(local);
+    for (var i = 0; i < 3; i++) {
+      final rv = i < r.length ? r[i] : 0;
+      final lv = i < l.length ? l[i] : 0;
+      if (rv != lv) return rv > lv;
+    }
+    return false;
+  }
+
   static checkUpdate(BuildContext context, {bool showSnackbar = false}) async {
     try {
       const url =
@@ -48,7 +64,7 @@ class ApplicationUtils {
       final tagName = res.data["tag_name"] as String;
       final remoteVersion = tagName.replaceFirst('v', '');
       debugPrint('remoteVersion: $remoteVersion');
-      if (packageInfo.version != remoteVersion) {
+      if (_isNewer(remoteVersion, packageInfo.version)) {
         if (Platform.isAndroid) {
           Get.to(
             Scaffold(
