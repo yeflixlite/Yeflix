@@ -66,41 +66,48 @@ class ApplicationUtils {
       BaseOptions(
         connectTimeout: const Duration(seconds: 30),
         receiveTimeout: const Duration(seconds: 30),
+        headers: {'Accept': 'application/vnd.github+json'},
       ),
     );
 
-    try {
-      const url =
-          "https://api.github.com/repos/yeflixlite/Yeflix/releases/latest";
-      final res = await dioWithTimeout.get(url);
-      final data = res.data as Map;
-      final tagName = data["tag_name"] as String;
-      final remoteVersion = tagName.replaceFirst('v', '');
-      final assets = (data['assets'] as List?) ?? const [];
-      debugPrint('remoteVersion: $remoteVersion');
-
-      if (Platform.isAndroid) {
-        await _checkUpdateAndroid(
-          context,
-          data,
-          assets,
-          remoteVersion,
-          showSnackbar: showSnackbar,
-        );
-        return;
-      }
-
-      if (_isNewer(remoteVersion, packageInfo.version)) {
-        final expectedName = 'Yeflix-$tagName-$_platformSuffix';
-        final assets = res.data['assets'] as List;
-        Map<String, dynamic>? asset;
-        try {
-          asset = assets.firstWhere(
-            (a) => (a['name'] as String) == expectedName,
-          ) as Map<String, dynamic>;
-        } catch (_) {
-          asset = null;
+    // Intenta hasta 2 veces con backoff.
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const url =
+            "https://api.github.com/repos/yeflixlite/Yeflix/releases/latest";
+        debugPrint('[checkUpdate] intento $attempt: GET $url');
+        final res = await dioWithTimeout.get(url);
+        final data = res.data as Map;
+        final tagName = data["tag_name"] as String;
+        final remoteVersion = tagName.replaceFirst('v', '');
+        final assets = (data['assets'] as List?) ?? const [];
+        debugPrint('[checkUpdate] ok: tag=$tagName version=$remoteVersion assets=${assets.length}');
+        for (final a in assets) {
+          debugPrint('  asset: ${a['name']} size=${a['size']}');
         }
+
+        if (Platform.isAndroid) {
+          await _checkUpdateAndroid(
+            context,
+            data,
+            assets,
+            remoteVersion,
+            showSnackbar: showSnackbar,
+          );
+          return;
+        }
+
+        if (_isNewer(remoteVersion, packageInfo.version)) {
+          final expectedName = 'Yeflix-$tagName-$_platformSuffix';
+          final assetsList = res.data['assets'] as List;
+          Map<String, dynamic>? asset;
+          try {
+            asset = assetsList.firstWhere(
+              (a) => (a['name'] as String) == expectedName,
+            ) as Map<String, dynamic>;
+          } catch (_) {
+            asset = null;
+          }
 
         showPlatformDialog(
           context: context,
@@ -151,21 +158,22 @@ class ApplicationUtils {
         );
       }
     } catch (e) {
-      if (context.mounted) {
+      debugPrint('[checkUpdate] ERROR: $e');
+      if (attempt == 2 && context.mounted) {
         showPlatformSnackbar(
           context: context,
           title: 'upgrade.check-update'.i18n,
-          content: 'upgrade.error'.i18n,
+          content: 'Error de red: $e\nPulsa "Reintentar" o comprueba tu conexión/proxy.',
           action: TextButton(
             child: Text('Reintentar'.i18n),
-            onPressed: () {
-              ApplicationUtils.checkUpdate(context);
-            },
+            onPressed: () => ApplicationUtils.checkUpdate(context),
           ),
         );
+      } else if (attempt < 2) {
+        await Future.delayed(Duration(seconds: attempt * 2));
       }
-      return;
     }
+  }
   }
 
   /// Número de compilación publicado en el release.
@@ -174,9 +182,15 @@ class ApplicationUtils {
   /// `{"version":"1.0.2","build":8}`) y, si no existe, lo deduce del nombre de
   /// los APK (`Yeflix-1.0.2-8-arm64-v8a.apk`).
   static Future<int?> _remoteBuildNumber(List assets, String version) async {
+    debugPrint('[remoteBuild] assets recibidos: ${assets.length}');
+    for (final a in assets) {
+      debugPrint('  asset: ${a['name']}');
+    }
+
     for (final a in assets) {
       if ((a['name'] as String?) == 'version.json') {
         try {
+          debugPrint('[remoteBuild] descargando version.json desde ${a['browser_download_url']}');
           final r = await dio.get(a['browser_download_url'] as String);
           final raw = r.data;
           final map = raw is String ? jsonDecode(raw) : raw;
@@ -184,15 +198,21 @@ class ApplicationUtils {
           if (build is int) return build;
           if (build != null) return int.tryParse('$build');
         } catch (e) {
-          debugPrint('version.json no disponible: $e');
+          debugPrint('[remoteBuild] error version.json: $e');
         }
       }
     }
     final re = RegExp('^Yeflix-${RegExp.escape(version)}-(\\d+)-');
     for (final a in assets) {
-      final m = re.firstMatch(a['name'] as String? ?? '');
-      if (m != null) return int.tryParse(m.group(1)!);
+      final name = a['name'] as String? ?? '';
+      final m = re.firstMatch(name);
+      if (m != null) {
+        final build = int.tryParse(m.group(1)!);
+        debugPrint('[remoteBuild] regex match: $name -> build=$build');
+        return build;
+      }
     }
+    debugPrint('[remoteBuild] no se encontró build, fallback a null');
     return null;
   }
 
@@ -251,7 +271,9 @@ class ApplicationUtils {
         showPlatformSnackbar(
           context: context,
           title: 'upgrade.check-update'.i18n,
-          content: "upgrade.no-update".i18n,
+          content: 'Versión local: ${packageInfo.version}+${packageInfo.buildNumber}\n'
+              'Versión remota: $remoteVersion+$remoteBuild\n'
+              'No hay actualización disponible.',
         );
       }
       return;
