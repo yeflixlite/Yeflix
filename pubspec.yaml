@@ -1,7 +1,7 @@
 name: jiruhub
 description: Yeflix - Anime, movies and series streaming application
 publish_to: "none"
-version: 1.0.2+4
+version: 1.0.4+5
 environment:
   sdk: ">=3.0.3 <4.0.0"
 

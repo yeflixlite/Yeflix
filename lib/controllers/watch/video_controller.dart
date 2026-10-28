@@ -89,6 +89,9 @@ class VideoPlayerController extends GetxController {
   final RxInt exoDurationMs = 0.obs;
   Timer? _exoPositionTimer;
 
+  /// Permite registrar el momento exacto en que mpv deja de buffear.
+  bool _wasBuffering = false;
+
   final showSidebar = false.obs;
   final isOpenSidebar = false.obs;
   final isFullScreen = false.obs;
@@ -236,7 +239,7 @@ class VideoPlayerController extends GetxController {
     // - hwdec=no: evita error vaapi not supported by libswscale
     // - reconnect=0: evita SIGSEGV ~16s post-EHOSTUNREACH cuando
     //   libmpv intenta reconectar HLS y falla en la limpieza interna
-    // - network-timeout=5: fallo rápido
+    // - network-timeout=30: red de seguridad sin abortar descargas lentas
     if (player.platform is NativePlayer) {
       final np = player.platform as NativePlayer;
       if (Platform.isLinux) {
@@ -245,20 +248,22 @@ class VideoPlayerController extends GetxController {
             'demuxer-lavf-o', 'reconnect=0,reconnect_delay_max=0');
       } else {
         await np.setProperty('hwdec', 'auto-safe');
-        // REVISIÓN: Aumentar timeouts para evitar fallos de conexión en streams iniciales
-        // en Windows/Mac, pero mantener cortos para fallover.
-        await np.setProperty('demuxer-lavf-o',
-            'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
+        // reconnect=0: reconnect_streamed hace que FFmpeg interprete el EOF del
+        // playlist HLS VOD como un corte y reintente en bucle durante ~20s
+        // antes de abrir el primer segmento. En VOD no debe reconectar.
+        await np.setProperty('demuxer-lavf-o', 'reconnect=0');
       }
       try {
-        // Reducir la latencia de análisis inicial para acelerar el primer frame
-        await np.setProperty('demuxer-lavf-analyzeduration', '0.2');
-        await np.setProperty('demuxer-lavf-probesize', '65536');
+        // Analizar 1s / 1MB: con 0.2s/64KB FFmpeg no detectaba los parámetros
+        // del audio AAC ("Could not find codec parameters for stream 1").
+        await np.setProperty('demuxer-lavf-analyzeduration', '1.0');
+        await np.setProperty('demuxer-lavf-probesize', '1048576');
         await np.setProperty('demuxer-readahead-secs', '2');
         await np.setProperty('cache-pause-initial', 'no');
       } catch (_) {}
-      // Timeout incrementado ligeramente si la red es inestable
-      await np.setProperty('network-timeout', '10');
+      // Timeout de red amplio: solo como red de seguridad. Un valor bajo
+      // aborta descargas lentas pero válidas y provoca reintentos.
+      await np.setProperty('network-timeout', '30');
     }
     play();
 
@@ -521,6 +526,14 @@ class VideoPlayerController extends GetxController {
   }
 
   _initPlayer() {
+    // Log del momento exacto en que el video está listo (primer frame).
+    player.stream.buffering.listen((buffering) {
+      if (_wasBuffering && !buffering) {
+        logger.info('⏱ buffering=false — primer frame listo');
+      }
+      _wasBuffering = buffering;
+    });
+
     // 切换剧集
     ever(index, (callback) {
       play();
@@ -1535,6 +1548,116 @@ class VideoPlayerController extends GetxController {
     }
   }
 
+  /// Descarga el playlist HLS (maestro + media) con gzip y escribe un playlist
+  /// local con URLs absolutas. FFmpeg descarga el playlist VOD completo
+  /// (~156 KB) sin comprimir antes de abrir el primer segmento; con gzip son
+  /// ~2.5 KB. Devuelve null si no es seguro/aplicable (live, cifrado, error).
+  Future<String?> _prefetchHlsPlaylist(
+    String url,
+    Map<String, String>? headers,
+  ) async {
+    if (!url.contains('.m3u8')) return null;
+    final client = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 3),
+      receiveTimeout: const Duration(seconds: 3),
+      headers: headers,
+      followRedirects: true,
+    ));
+    try {
+      final masterResp = await client.get<String>(
+        url,
+        options: Options(responseType: ResponseType.plain),
+      );
+      final masterBody = masterResp.data;
+      if (masterBody == null || !masterBody.contains('#EXTM3U')) return null;
+      final masterUri = Uri.parse(masterResp.realUri.toString());
+
+      var mediaBody = masterBody;
+      var mediaUri = masterUri;
+
+      if (masterBody.contains('#EXT-X-STREAM-INF')) {
+        // Con pistas de audio separadas mpv necesita el master original.
+        if (masterBody.contains('#EXT-X-MEDIA:')) return null;
+        final lines = masterBody.split('\n');
+        int? bestBw;
+        String? bestUri;
+        for (var i = 0; i < lines.length; i++) {
+          final line = lines[i].trim();
+          if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+          final bw = int.tryParse(
+            RegExp(r'BANDWIDTH=(\d+)').firstMatch(line)?.group(1) ?? '',
+          );
+          for (var j = i + 1; j < lines.length; j++) {
+            final candidate = lines[j].trim();
+            if (candidate.isEmpty || candidate.startsWith('#')) continue;
+            if (bw != null && (bestBw == null || bw < bestBw)) {
+              bestBw = bw;
+              bestUri = candidate;
+            }
+            break;
+          }
+        }
+        if (bestUri == null) return null;
+        final mediaUrl = masterUri.resolve(bestUri).toString();
+        final mediaResp = await client.get<String>(
+          mediaUrl,
+          options: Options(responseType: ResponseType.plain),
+        );
+        mediaBody = mediaResp.data ?? '';
+        mediaUri = Uri.parse(mediaResp.realUri.toString());
+      }
+
+      // Solo VOD: un playlist en vivo debe refrescarse y no puede ser local.
+      if (!mediaBody.contains('#EXTM3U') ||
+          !mediaBody.contains('#EXT-X-ENDLIST')) {
+        return null;
+      }
+      // Cifrado: las claves requieren reescritura; mejor no tocar.
+      if (mediaBody.contains('#EXT-X-KEY')) return null;
+
+      final out = <String>[];
+      for (final raw in mediaBody.split('\n')) {
+        final line = raw.trim();
+        if (line.isEmpty || line.startsWith('#')) {
+          if (line.startsWith('#EXT-X-MAP:')) {
+            out.add(line.replaceAllMapped(
+              RegExp(r'URI="([^"]+)"'),
+              (m) => 'URI="${mediaUri.resolve(m.group(1)!)}"',
+            ));
+          } else {
+            out.add(raw);
+          }
+          continue;
+        }
+        out.add(mediaUri.resolve(line).toString());
+      }
+
+      final dir = Directory(
+        path.join(JiruHubDirectory.getCacheDirectory, 'hls_prefetch'),
+      );
+      dir.createSync(recursive: true);
+      // Limpieza best-effort de playlists antiguas.
+      try {
+        final cutoff = DateTime.now().subtract(const Duration(hours: 1));
+        for (final f in dir.listSync()) {
+          if (f is File && f.statSync().modified.isBefore(cutoff)) {
+            f.deleteSync();
+          }
+        }
+      } catch (_) {}
+      final file = File(
+        path.join(dir.path, 'pl_${DateTime.now().microsecondsSinceEpoch}.m3u8'),
+      );
+      file.writeAsStringSync(out.join('\n'));
+      return file.path;
+    } catch (e) {
+      logger.warning('HLS prefetch falló (se usará URL original): $e');
+      return null;
+    } finally {
+      client.close();
+    }
+  }
+
   // Intenta abrir el player con la URL dada.
   // Retorna true solo si el stream REALMENTE empieza a reproducirse.
   Future<bool> _tryOpenPlayer(String url, Map<String, String>? headers) async {
@@ -1559,8 +1682,10 @@ class VideoPlayerController extends GetxController {
 
     // Configurar propiedades mpv de baja latencia ANTES de abrir el stream.
     // - 'referrer' asegura que cada petición de fragmento .ts lleve el Referer necesario para VidHide CDN.
-    // - 'demuxer-lavf-analyzeduration 0.5' reduce la espera de análisis de 5s a 0.5s.
-    // - 'demuxer-lavf-probesize 131072' analiza solo 128KB en vez de 5MB.
+    // - 'demuxer-lavf-o reconnect=0' evita el bucle de reconexión al llegar al
+    //   EOF del playlist HLS VOD (~20s de espera antes del primer segmento).
+    // - 'demuxer-lavf-analyzeduration 1.0' / 'probesize 1MB' permiten detectar
+    //   correctamente los parámetros del audio AAC.
     // - 'cache-pause-initial no' arranca en cuanto el primer frame está decodificado.
     try {
       final nativePlayer = player.platform as NativePlayer;
@@ -1574,19 +1699,39 @@ class VideoPlayerController extends GetxController {
         await nativePlayer.setProperty('user-agent', ua);
         logger.info('mpv user-agent configurado');
       }
-      await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '0.2');
-      await nativePlayer.setProperty('demuxer-lavf-probesize', '65536');
-      await nativePlayer.setProperty('demuxer-readahead-secs', '2');
+      await nativePlayer.setProperty('demuxer-lavf-o', 'reconnect=0');
+      await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '1.0');
+      await nativePlayer.setProperty('demuxer-lavf-probesize', '1048576');
+      await nativePlayer.setProperty('demuxer-readahead-secs', '0.5');
       await nativePlayer.setProperty('cache-pause-initial', 'no');
-      await nativePlayer.setProperty('network-timeout', '5');
+      await nativePlayer.setProperty('network-timeout', '30');
+      // HLS: buffering inicial agresivo para primer frame rápido
+      await nativePlayer.setProperty('cache-secs', '10');
+      // Forzar selección de calidad más baja inicialmente para arranque rápido
+      await nativePlayer.setProperty('hls-bitrate', 'min');
       logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] mpv props set');
     } catch (e) {
       logger.warning('No se pudieron configurar propiedades mpv: $e');
     }
 
+    // Prefetch del playlist HLS: con gzip baja de ~156 KB a ~2.5 KB. Si no es
+    // aplicable o falla, se usa la URL original sin penalizar el arranque.
+    var playUrl = url;
+    if (url.contains('.m3u8')) {
+      final pf0 = DateTime.now();
+      final localPlaylist = await _prefetchHlsPlaylist(url, cleanHeaders);
+      final pfMs = DateTime.now().difference(pf0).inMilliseconds;
+      if (localPlaylist != null) {
+        playUrl = localPlaylist;
+        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] HLS prefetch OK en ${pfMs}ms');
+      } else {
+        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] HLS prefetch omitido en ${pfMs}ms');
+      }
+    }
+
     try {
       logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() START');
-      await player.open(Media(url, httpHeaders: cleanHeaders));
+      await player.open(Media(playUrl, httpHeaders: cleanHeaders));
       logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() RETURNED (stream abierto, esperando playback)');
     } catch (e) {
       logger.severe('player.open error: $e');

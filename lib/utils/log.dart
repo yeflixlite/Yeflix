@@ -16,13 +16,12 @@ class MiruLog {
     Logger.root.onRecord.listen((record) {
       final log =
           '${record.loggerName} ${record.level.name} ${record.time}: ${record.message} ${record.error ?? ''} ${record.stackTrace ?? ''}';
-      // 如果是开发环境则打印到控制台
+      // SIEMPRE imprimir a consola para debugging de timing
+      debugPrint(log);
+      // También guardar a archivo si está habilitado
       if (kReleaseMode) {
         writeLogToFile(log);
-        return;
       }
-
-      debugPrint(log);
     });
   }
 
