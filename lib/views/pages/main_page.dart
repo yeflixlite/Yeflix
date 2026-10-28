@@ -11,6 +11,7 @@ import 'package:jiruhub/controllers/main_controller.dart';
 import 'package:jiruhub/views/pages/search/search_page.dart';
 import 'package:jiruhub/views/pages/settings/settings_page.dart';
 import 'package:jiruhub/router/router.dart';
+import 'package:jiruhub/utils/application.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/layout.dart';
 import 'package:jiruhub/utils/jiruhub_storage.dart';
@@ -214,7 +215,11 @@ class _AndroidMainPageState extends fluent.State<AndroidMainPage> {
   @override
   void initState() {
     c = Get.put(MainController());
-    // Sin aviso automático de actualizaciones al abrir la app.
+    // Aviso de actualización al abrir (solo si realmente hay una más nueva).
+    // Se retrasa para que la primera pantalla termine de montarse.
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) ApplicationUtils.checkUpdate(context);
+    });
     super.initState();
   }
 
