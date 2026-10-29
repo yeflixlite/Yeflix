@@ -89,6 +89,27 @@ class VideoPlayerController extends GetxController {
   final RxInt exoDurationMs = 0.obs;
   Timer? _exoPositionTimer;
 
+  // ── Loader YEFLIX ────────────────────────────────────────────────────────
+  /// Carga inicial: desde `play()` hasta el primer frame real del video.
+  final isPreparingPlayback = false.obs;
+
+  /// Buffering después de que ya se mostró el primer frame.
+  final isBufferingPlayback = false.obs;
+
+  /// El reproductor confirmó un frame real (no solo "playing" o buffering).
+  final hasRenderedFirstFrame = false.obs;
+
+  Timer? _loaderWatchdog;
+
+  /// El loader solo tapa la UI mientras no hay error ni cast activo.
+  bool get isLoaderVisible =>
+      error.value.isEmpty &&
+      serverFailedMessage.value.isEmpty &&
+      dlnaDevice.value == null &&
+      (isGettingWatchData.value ||
+          isPreparingPlayback.value ||
+          isBufferingPlayback.value);
+
   /// Permite registrar el momento exacto en que mpv deja de buffear.
   bool _wasBuffering = false;
 
@@ -284,6 +305,7 @@ class VideoPlayerController extends GetxController {
     });
     exo.onRenderedFirstFrame.listen((_) {
       logger.info('ExoPlayer: primer frame renderizado en pantalla');
+      _markFirstFrame();
       serverFailedMessage.value = '';
       error.value = '';
       isGettingWatchData.value = false;
@@ -307,6 +329,9 @@ class VideoPlayerController extends GetxController {
       exoPlaybackState.value = state;
       isPlaying.value = playing || isPl;
       // Media3: STATE_IDLE = 1, STATE_BUFFERING = 2, STATE_READY = 3, STATE_ENDED = 4
+      if (hasRenderedFirstFrame.value) {
+        isBufferingPlayback.value = state == 2;
+      }
       if (state == 3 || isPl || (state == 2 && playing)) {
         serverFailedMessage.value = '';
         error.value = '';
@@ -321,13 +346,18 @@ class VideoPlayerController extends GetxController {
   /// Callback de error del reproductor nativo ExoPlayer.
   void onExoError(String message) {
     logger.severe('ExoPlayer error: $message');
-    // No mostrar error si hay reproducción activa (p.ej. errores de segmentos
-    // de thumbnails en HLS de VidHide mientras el video principal está OK)
-    if (isPlaying.value || exoIsPlaying.value || exoPositionMs.value > 0) {
+    // No mostrar error si ya hay un frame real o progreso (p.ej. errores de
+    // segmentos de thumbnails en HLS de VidHide mientras el video principal
+    // está OK). `isPlaying` por sí solo es optimista y no prueba que haya
+    // imagen, así que no se usa para silenciar errores de carga inicial.
+    final hasPlaybackProgress =
+        hasRenderedFirstFrame.value || exoPositionMs.value > 0;
+    if (hasPlaybackProgress) {
       logger.warning('ExoPlayer error ignorado (reproducción activa): $message');
       return;
     }
     exoLoading.value = false;
+    _finishLoader();
     error.value = 'ExoPlayer: $message';
     serverFailedMessage.value = 'Error de reproducción: $message';
     isPlaying.value = false;
@@ -348,6 +378,50 @@ class VideoPlayerController extends GetxController {
   /// Callback de cambio de carga del reproductor nativo ExoPlayer.
   void onExoLoadingChanged(bool loading) {
     exoLoading.value = loading;
+  }
+
+  /// Muestra el loader desde el inicio de una carga.
+  void _beginLoader() {
+    isPreparingPlayback.value = true;
+    isBufferingPlayback.value = false;
+    hasRenderedFirstFrame.value = false;
+    _startLoaderWatchdog();
+  }
+
+  /// Oculta el loader cuando el reproductor ya mostró un frame real.
+  void _markFirstFrame() {
+    if (hasRenderedFirstFrame.value) return;
+    hasRenderedFirstFrame.value = true;
+    isPreparingPlayback.value = false;
+    isBufferingPlayback.value = false;
+    _loaderWatchdog?.cancel();
+    _loaderWatchdog = null;
+  }
+
+  /// Oculta el loader sin marcar un frame (error o cancelación).
+  void _finishLoader() {
+    isPreparingPlayback.value = false;
+    isBufferingPlayback.value = false;
+    _loaderWatchdog?.cancel();
+    _loaderWatchdog = null;
+  }
+
+  /// Red de seguridad: si en 60 s no hubo frame ni error, se informa.
+  void _startLoaderWatchdog() {
+    _loaderWatchdog?.cancel();
+    final session = _playSessionId;
+    _loaderWatchdog = Timer(const Duration(seconds: 60), () {
+      if (session != _playSessionId) return;
+      if (hasRenderedFirstFrame.value) return;
+      if (error.value.isNotEmpty || serverFailedMessage.value.isNotEmpty) {
+        _finishLoader();
+        return;
+      }
+      _finishLoader();
+      serverFailedMessage.value =
+          'El video tardó demasiado en cargar. Comprueba tu conexión o '
+          'cambia de servidor.';
+    });
   }
 
   /// Abre una fuente en ExoPlayer nativo (Android).
@@ -431,6 +505,7 @@ class VideoPlayerController extends GetxController {
   @override
   void onClose() async {
     _exoPositionTimer?.cancel();
+    _loaderWatchdog?.cancel();
     if (isExoPlayerActive) {
       await exo.dispose();
     }
@@ -547,6 +622,17 @@ class VideoPlayerController extends GetxController {
         logger.info('⏱ buffering=false — primer frame listo');
       }
       _wasBuffering = buffering;
+      if (hasRenderedFirstFrame.value) {
+        isBufferingPlayback.value = buffering;
+      }
+    });
+
+    // Primer frame real en media_kit: el ancho solo se conoce cuando el video
+    // ya se decodificó. `playing` o `duration` no garantizan un frame.
+    player.stream.width.listen((width) {
+      if (width != null && width > 0) {
+        _markFirstFrame();
+      }
     });
 
     // 切换剧集
@@ -674,6 +760,10 @@ class VideoPlayerController extends GetxController {
         return;
       }
       position.value = event;
+      if (event.inMilliseconds > 0) {
+        // La posición avanzó: hay un frame real en pantalla.
+        _markFirstFrame();
+      }
       if (event.inSeconds > 0) {
         serverFailedMessage.value = '';
         error.value = '';
@@ -686,15 +776,18 @@ class VideoPlayerController extends GetxController {
       logger.severe('media_kit error: $event');
       sendMessage(Message(Text(event)));
       // Si el error indica que el stream no es accesible, notificar solo si no hay reproducción activa
-      final isAlreadyPlaying = player.state.playing ||
-          player.state.position.inSeconds > 0 ||
-          isPlaying.value;
+      // Solo un frame real (o progreso de posición) prueba que hay imagen.
+      // `player.state.playing` es optimista durante la carga inicial y podría
+      // ocultar un fallo real dejando el loader girando hasta el watchdog.
+      final isAlreadyPlaying = hasRenderedFirstFrame.value ||
+          player.state.position.inSeconds > 0;
       if (!isAlreadyPlaying &&
           (event.toLowerCase().contains('not found') ||
               event.toLowerCase().contains('403') ||
               event.toLowerCase().contains('500') ||
               event.toLowerCase().contains('no such') ||
               event.toLowerCase().contains('failed'))) {
+        _finishLoader();
         if (serverFailedMessage.value.isEmpty) {
           if (availableServers.length > 1) {
             serverFailedMessage.value =
@@ -716,6 +809,7 @@ class VideoPlayerController extends GetxController {
       return;
     }
     final sessionId = ++_playSessionId;
+    _beginLoader();
     // ── TIMING DIAGNÓSTICO ─────────────────────────────────────────────────
     final _t0 = DateTime.now();
     logger.info('⏱ [T+0ms] play() iniciado para index: ${index.value}');
@@ -740,6 +834,7 @@ class VideoPlayerController extends GetxController {
       } catch (e) {
         if (sessionId != _playSessionId) return;
         logger.severe('local file open error: $e');
+        _finishLoader();
         error.value = e.toString();
         serverFailedMessage.value = 'Error al abrir archivo local: $e';
         isGettingWatchData.value = false;
@@ -749,6 +844,7 @@ class VideoPlayerController extends GetxController {
     }
 
     if (runtime == null) {
+      _finishLoader();
       error.value = 'No se encontró la extensión para cargar este video.';
       serverFailedMessage.value = error.value;
       isGettingWatchData.value = false;
@@ -761,6 +857,7 @@ class VideoPlayerController extends GetxController {
     } catch (e) {
       if (sessionId != _playSessionId) return;
       logger.severe(e);
+      _finishLoader();
       error.value = e.toString();
       serverFailedMessage.value = 'Error al obtener fuentes: $e';
       isGettingWatchData.value = false;
@@ -772,6 +869,7 @@ class VideoPlayerController extends GetxController {
     if (sessionId != _playSessionId) return;
 
     if (watchData == null) {
+      _finishLoader();
       error.value = 'No se encontraron datos de reproducción.';
       serverFailedMessage.value = error.value;
       isGettingWatchData.value = false;
@@ -784,6 +882,7 @@ class VideoPlayerController extends GetxController {
           await getTorrentMediaFile();
         } catch (e) {
           logger.severe(e);
+          _finishLoader();
           error.value = e.toString();
           return;
         }
@@ -931,6 +1030,7 @@ class VideoPlayerController extends GetxController {
                   '${errorDetails.isNotEmpty ? 'Errores: $errorDetails\n' : ''}'
                   'Cambia de servidor o intenta más tarde.';
               error.value = serverFailedMessage.value;
+              _finishLoader();
               logger.severe('Todos los servidores fallaron');
               if (!isExoPlayerActive) await _safePlayerInit();
               isGettingWatchData.value = false;
@@ -981,6 +1081,7 @@ class VideoPlayerController extends GetxController {
       return;
     } catch (e) {
       isGettingWatchData.value = false;
+      _finishLoader();
       error.value = e.toString();
       serverFailedMessage.value = e.toString();
       sendMessage(
@@ -1047,6 +1148,7 @@ class VideoPlayerController extends GetxController {
     serverFailedMessage.value = '';
     error.value = '';
     isGettingWatchData.value = true;
+    _beginLoader();
 
     final embedUrl = availableServers[name]!;
     ExtensionBangumiWatch newWatch;
@@ -1057,6 +1159,7 @@ class VideoPlayerController extends GetxController {
       newWatch = res as ExtensionBangumiWatch;
     } catch (e) {
       logger.severe(e);
+      _finishLoader();
       serverFailedMessage.value =
           'No se pudo extraer el servidor "$name". Intenta otro.';
       isGettingWatchData.value = false;
@@ -1065,6 +1168,7 @@ class VideoPlayerController extends GetxController {
 
     if (newWatch.url.startsWith('error://')) {
       final msg = newWatch.url.replaceFirst('error://', '');
+      _finishLoader();
       serverFailedMessage.value =
           'Servidor "$name" no disponible: $msg. Intenta otro.';
       isGettingWatchData.value = false;
@@ -1091,6 +1195,7 @@ class VideoPlayerController extends GetxController {
 
     final worked = await _openStream(newWatch.url, watchData?.headers);
     if (!worked) {
+      _finishLoader();
       serverFailedMessage.value =
           'No se pudo conectar al servidor "$name". Intenta otro.';
     } else {
@@ -1238,6 +1343,7 @@ class VideoPlayerController extends GetxController {
 
   // 切换画质
   switchQuality(String qualityUrl) async {
+    _beginLoader();
     final currentMs = isExoPlayerActive
         ? exoPositionMs.value
         : player.state.position.inMilliseconds;
@@ -1264,9 +1370,16 @@ class VideoPlayerController extends GetxController {
           await nativePlayer.setProperty('user-agent', ua);
         }
       } catch (_) {}
-      await player.open(
-        Media(qualityUrl, httpHeaders: cleanHeaders),
-      );
+      try {
+        await player.open(
+          Media(qualityUrl, httpHeaders: cleanHeaders),
+        );
+      } catch (e) {
+        _finishLoader();
+        error.value = e.toString();
+        serverFailedMessage.value = 'No se pudo cambiar de calidad: $e';
+        return;
+      }
       final currentSecond = currentMs ~/ 1000;
       Timer.periodic(const Duration(seconds: 1), (timer) {
         player.seek(Duration(seconds: currentSecond));

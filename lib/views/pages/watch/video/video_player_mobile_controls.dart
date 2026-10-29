@@ -11,8 +11,7 @@ import 'package:jiruhub/utils/layout.dart';
 import 'package:jiruhub/utils/router.dart';
 import 'package:jiruhub/views/pages/watch/video/video_player_cast.dart';
 import 'package:jiruhub/views/pages/watch/video/video_player_sidebar.dart';
-import 'package:jiruhub/views/widgets/cache_network_image.dart';
-import 'package:jiruhub/views/widgets/progress.dart';
+import 'package:jiruhub/views/widgets/yeflix_loader.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
 
@@ -221,6 +220,17 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                 ),
               ),
             ),
+            // Loader YEFLIX: cubre la carga inicial y el buffering real.
+            Positioned.fill(
+              child: Obx(() {
+                if (!_c.isLoaderVisible) {
+                  return const SizedBox.shrink();
+                }
+                return YeflixLoader(
+                  opaque: !_c.hasRenderedFirstFrame.value,
+                );
+              }),
+            ),
             // 手势层
             Positioned.fill(
               child: GestureDetector(
@@ -411,115 +421,67 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                       ),
                     );
                   }
-                  if (!_c.isGettingWatchData.value || isPlayingVideo) {
-                    return StreamBuilder(
-                      stream: _c.player.stream.buffering,
-                      builder: (context, snapshot) {
-                        if (snapshot.hasData && snapshot.data! ||
-                            _c.player.state.buffering) {
-                          return const ProgressRing();
-                        }
-                        if (_c.dlnaDevice.value != null) {
-                          return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                FlutterI18n.translate(
-                                  context,
-                                  'video.cast-device',
-                                  translationParams: {
-                                    'device':
-                                        _c.dlnaDevice.value!.info.friendlyName,
-                                  },
-                                ),
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              FilledButton(
-                                onPressed: () {
-                                  _c.disconnectDLNADevice();
-                                },
-                                child: Text(
-                                  'common.disconnect'.i18n,
-                                ),
-                              ),
-                            ],
-                          );
-                        }
-                        return const SizedBox.shrink();
-                      },
+                  if (_c.isLoaderVisible) {
+                    return const SizedBox.shrink();
+                  }
+                  if (_c.dlnaDevice.value != null) {
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          FlutterI18n.translate(
+                            context,
+                            'video.cast-device',
+                            translationParams: {
+                              'device':
+                                  _c.dlnaDevice.value!.info.friendlyName,
+                            },
+                          ),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        FilledButton(
+                          onPressed: () {
+                            _c.disconnectDLNADevice();
+                          },
+                          child: Text(
+                            'common.disconnect'.i18n,
+                          ),
+                        ),
+                      ],
                     );
                   }
-
-                  return Card(
-                    color: Theme.of(context).colorScheme.surfaceVariant,
-                    elevation: 0,
-                    child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_c.runtime?.extension.icon != null)
-                            Container(
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                              ),
-                              clipBehavior: Clip.antiAlias,
-                              margin: const EdgeInsets.only(right: 10),
-                              child: CacheNetWorkImagePic(
-                                _c.runtime!.extension.icon!,
-                                width: 30,
-                                height: 30,
-                              ),
-                            ),
-                          Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _c.runtime?.extension.name ?? 'Yeflix',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                'video.getting-streamlink'.i18n,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w300,
-                                ),
-                              ),
-                            ],
-                          )
-                        ],
-                      ),
-                    ),
-                  );
+                  return const SizedBox.shrink();
                 }),
               ),
             ),
             // 头部控制栏
-            if (_showControls)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: _Header(
-                  controller: _c,
-                ),
-              ),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Obx(() {
+                if (!_showControls || _c.isLoaderVisible) {
+                  return const SizedBox.shrink();
+                }
+                return _Header(controller: _c);
+              }),
+            ),
             // 底部控制栏
-            if (_showControls)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: _Footer(controller: _c),
-              ),
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Obx(() {
+                if (!_showControls || _c.isLoaderVisible) {
+                  return const SizedBox.shrink();
+                }
+                return _Footer(controller: _c);
+              }),
+            ),
             Positioned.fill(
               child: Obx(
                 () {

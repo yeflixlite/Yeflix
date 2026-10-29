@@ -8,8 +8,8 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:jiruhub/controllers/watch/video_controller.dart';
 import 'package:jiruhub/router/router.dart';
 import 'package:jiruhub/utils/i18n.dart';
-import 'package:jiruhub/views/widgets/cache_network_image.dart';
 import 'package:jiruhub/views/widgets/watch/playlist.dart';
+import 'package:jiruhub/views/widgets/yeflix_loader.dart';
 import 'package:window_manager/window_manager.dart';
 
 class VideoPlayerDesktopControls extends StatefulWidget {
@@ -110,6 +110,17 @@ class _VideoPlayerDesktopControlsState
                   },
                 ),
               ),
+              // Loader YEFLIX: carga inicial y buffering reales.
+              Positioned.fill(
+                child: Obx(() {
+                  if (!_c.isLoaderVisible) {
+                    return const SizedBox.shrink();
+                  }
+                  return YeflixLoader(
+                    opaque: !_c.hasRenderedFirstFrame.value,
+                  );
+                }),
+              ),
               Positioned.fill(
                 child: SizedBox.expand(
                   child: Center(
@@ -170,58 +181,10 @@ class _VideoPlayerDesktopControlsState
                           ],
                         );
                       }
-                      if (!_c.isGettingWatchData.value || isPlayingVideo) {
-                        return StreamBuilder(
-                          stream: _c.player.stream.buffering,
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData && snapshot.data! ||
-                                _c.player.state.buffering) {
-                              return const ProgressRing();
-                            }
-                            return const SizedBox.shrink();
-                          },
-                        );
+                      if (_c.isLoaderVisible) {
+                        return const SizedBox.shrink();
                       }
-                      return Card(
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (_c.runtime?.extension.icon != null)
-                              Container(
-                                decoration: const BoxDecoration(
-                                  shape: BoxShape.circle,
-                                ),
-                                clipBehavior: Clip.antiAlias,
-                                margin: const EdgeInsets.only(right: 10),
-                                child: CacheNetWorkImagePic(
-                                  _c.runtime!.extension.icon!,
-                                  width: 30,
-                                  height: 30,
-                                ),
-                              ),
-                            Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _c.runtime?.extension.name ?? 'Yeflix',
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Text(
-                                  'video.getting-streamlink'.i18n,
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w300,
-                                  ),
-                                ),
-                              ],
-                            )
-                          ],
-                        ),
-                      );
+                      return const SizedBox.shrink();
                     }),
                   ),
                 ),
@@ -230,19 +193,24 @@ class _VideoPlayerDesktopControlsState
                 child: Column(
                   children: [
                     // header
-                    Opacity(
-                      opacity: _showControls ? 1 : 0,
-                      child: _Header(
-                        title: _c.title,
-                        episode: _c.playList[_c.index.value].name,
-                        onClose: () {
-                          if (_c.isFullScreen.value) {
-                            WindowManager.instance.setFullScreen(false);
-                          }
-                          router.pop();
-                        },
-                      ),
-                    ),
+                    Obx(() {
+                      if (_c.isLoaderVisible) {
+                        return const SizedBox.shrink();
+                      }
+                      return Opacity(
+                        opacity: _showControls ? 1 : 0,
+                        child: _Header(
+                          title: _c.title,
+                          episode: _c.playList[_c.index.value].name,
+                          onClose: () {
+                            if (_c.isFullScreen.value) {
+                              WindowManager.instance.setFullScreen(false);
+                            }
+                            router.pop();
+                          },
+                        ),
+                      );
+                    }),
                     // center — notificación de servidor fallido
                     Expanded(
                       child: Center(
@@ -295,10 +263,15 @@ class _VideoPlayerDesktopControlsState
                       ),
                     ),
                     // footer
-                    Opacity(
-                      opacity: _showControls ? 1 : 0,
-                      child: _Footer(controller: _c),
-                    ),
+                    Obx(() {
+                      if (_c.isLoaderVisible) {
+                        return const SizedBox.shrink();
+                      }
+                      return Opacity(
+                        opacity: _showControls ? 1 : 0,
+                        child: _Footer(controller: _c),
+                      );
+                    }),
                   ],
                 ),
               ),

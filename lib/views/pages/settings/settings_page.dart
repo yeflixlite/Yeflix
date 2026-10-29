@@ -605,6 +605,17 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
       const SizedBox(height: 10),
+      SettingsSwitchTile(
+        title: 'settings.auto-check-update'.i18n,
+        buildSubtitle: () => 'settings.auto-check-update-subtitle'.i18n,
+        buildValue: () {
+          return JiruHubStorage.getSetting(SettingKey.autoCheckUpdate);
+        },
+        onChanged: (value) {
+          JiruHubStorage.setSetting(SettingKey.autoCheckUpdate, value);
+        },
+      ),
+      const SizedBox(height: 10),
       SettingsExpanderTile(
         leading: const Image(
           image: AssetImage('assets/icon/logo.png'),

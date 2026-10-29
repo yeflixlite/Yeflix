@@ -40,8 +40,13 @@ class _DesktopMainPageState extends State<DesktopMainPage> with WindowListener {
   @override
   void initState() {
     c = Get.put(MainController());
-    // La comprobación de actualizaciones es manual desde Ajustes: no se
-    // muestra ningún aviso automático al abrir la app.
+    // Comprobación automática al abrir, respetando el ajuste del usuario.
+    // El servicio cachea el release y evita llamadas repetidas a GitHub.
+    Future.delayed(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      if (JiruHubStorage.getSetting(SettingKey.autoCheckUpdate) != true) return;
+      ApplicationUtils.checkUpdate(context);
+    });
     windowManager.addListener(this);
     super.initState();
   }
@@ -215,10 +220,13 @@ class _AndroidMainPageState extends fluent.State<AndroidMainPage> {
   @override
   void initState() {
     c = Get.put(MainController());
-    // Aviso de actualización al abrir (solo si realmente hay una más nueva).
-    // Se retrasa un poco para que la primera pantalla termine de montarse.
+    // Aviso de actualización al abrir (solo si está activado y realmente hay
+    // una versión más nueva). Se retrasa para que la primera pantalla termine
+    // de montarse.
     Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) ApplicationUtils.checkUpdate(context);
+      if (!mounted) return;
+      if (JiruHubStorage.getSetting(SettingKey.autoCheckUpdate) != true) return;
+      ApplicationUtils.checkUpdate(context);
     });
     super.initState();
   }

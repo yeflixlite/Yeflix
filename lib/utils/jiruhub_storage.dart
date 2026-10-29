@@ -209,4 +209,10 @@ class SettingKey {
   static const subtitleLastLanguageSelected = "SubtitleLastLanguageSelected";
   static const subtitleLastTitleSelected = "SubtitleLastTitleSelected";
   static const downloadQuality = "DownloadQuality";
+  static const updateCacheEtag = "UpdateCacheEtag";
+  static const updateCachePayload = "UpdateCachePayload";
+  static const updateCacheTimestamp = "UpdateCacheTimestamp";
+  static const updateVersionJsonUrl = "UpdateVersionJsonUrl";
+  static const updateVersionJsonBuild = "UpdateVersionJsonBuild";
+  static const updateVersionJsonTimestamp = "UpdateVersionJsonTimestamp";
 }
