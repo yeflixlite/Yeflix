@@ -9,6 +9,7 @@ import 'package:jiruhub/views/widgets/extension/extension_tile.dart';
 import 'package:jiruhub/views/pages/extension/extension_repo_page.dart';
 import 'package:jiruhub/router/router.dart';
 import 'package:jiruhub/utils/extension.dart';
+import 'package:jiruhub/services/extension/extension_update_service.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/router.dart';
 import 'package:jiruhub/views/widgets/button.dart';
@@ -183,6 +184,72 @@ class _ExtensionPageState extends State<ExtensionPage> {
     );
   }
 
+  /// Estado discreto del actualizador automatico de extensiones (independiente
+  /// del actualizador de la app).
+  Widget _buildUpdateStatus() {
+    final service = ExtensionUpdateService.instance;
+    return Obx(() {
+      final s = service.status.value;
+      final busy = s.isBusy;
+      final isError = s.phase == ExtensionUpdatePhase.error ||
+          s.phase == ExtensionUpdatePhase.rateLimited;
+      final color = isError
+          ? Colors.orange
+          : s.phase == ExtensionUpdatePhase.updated
+              ? Colors.green
+              : Colors.grey;
+      final text = s.message.isEmpty
+          ? 'Actualizacion automatica de extensiones'
+          : s.message;
+      return Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            if (busy)
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Icon(
+                isError
+                    ? Icons.error_outline
+                    : s.phase == ExtensionUpdatePhase.updated
+                        ? Icons.check_circle_outline
+                        : Icons.sync,
+                size: 16,
+                color: color,
+              ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                text,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: color),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Buscar actualizaciones de extensiones',
+              visualDensity: VisualDensity.compact,
+              iconSize: 16,
+              onPressed: busy
+                  ? null
+                  : () => service.check(manual: true, force: true),
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
   Widget _buildAndroid(BuildContext context) {
     return Obx(() {
       return Scaffold(
@@ -210,6 +277,7 @@ class _ExtensionPageState extends State<ExtensionPage> {
         ),
         body: ListView(
           children: [
+            _buildUpdateStatus(),
             if (c.runtimes.isEmpty)
               SizedBox(
                 height: 300,
@@ -261,6 +329,7 @@ class _ExtensionPageState extends State<ExtensionPage> {
               ],
             ),
             const SizedBox(height: 16),
+            _buildUpdateStatus(),
             if (c.runtimes.isEmpty)
               Expanded(
                 child: Column(

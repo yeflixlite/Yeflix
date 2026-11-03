@@ -123,7 +123,7 @@ class JiruHubStorage {
     await _initSetting(SettingKey.keyJ, -10.0);
     await _initSetting(SettingKey.arrowLeft, -2.0);
     await _initSetting(SettingKey.arrowRight, 2.0);
-    await _initSetting(SettingKey.readingMode, "standard");
+    await _initSetting(SettingKey.readingMode, "webTonn");
     await _initSetting(SettingKey.aniListToken, '');
     await _initSetting(SettingKey.aniListUserId, '');
     await _initSetting(SettingKey.autoTracking, true);
@@ -215,4 +215,8 @@ class SettingKey {
   static const updateVersionJsonUrl = "UpdateVersionJsonUrl";
   static const updateVersionJsonBuild = "UpdateVersionJsonBuild";
   static const updateVersionJsonTimestamp = "UpdateVersionJsonTimestamp";
+  static const extensionUpdateEtag = "ExtensionUpdateEtag";
+  static const extensionUpdateCheckedAt = "ExtensionUpdateCheckedAt";
+  static const extensionUpdateIndexHash = "ExtensionUpdateIndexHash";
+  static const extensionUpdateRepo = "ExtensionUpdateRepo";
 }

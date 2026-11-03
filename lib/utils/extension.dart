@@ -13,7 +13,6 @@ import 'package:jiruhub/controllers/settings_controller.dart';
 import 'package:jiruhub/data/services/extension_service.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/jiruhub_directory.dart';
-import 'package:jiruhub/utils/jiruhub_storage.dart';
 import 'package:jiruhub/utils/request.dart';
 import 'package:jiruhub/utils/router.dart';
 import 'package:jiruhub/views/widgets/button.dart';
@@ -34,7 +33,8 @@ class ExtensionUtils {
     // 创建目录
     Directory(extensionsDir).createSync(recursive: true);
     await _loadExtensions();
-    autoUpdate();
+    // La actualizacion automatica la orquesta ExtensionUpdateService desde
+    // main.dart (consulta periodica + estado discreto en la UI).
     // 监听目录变化
     Directory(extensionsDir).watch().listen((event) async {
       if (path.extension(event.path) == '.js') {
@@ -71,47 +71,32 @@ class ExtensionUtils {
     _reloadPage();
   }
 
-  // Actualiza en silencio las extensiones instaladas cuando el repo publica
-  // una version nueva (asi el usuario no tiene que reinstalarlas a mano).
-  static Future<void> autoUpdate() async {
-    try {
-      final base = JiruHubStorage.getSetting(SettingKey.jiruhubRepoUrl);
-      if (base.isEmpty || runtimes.isEmpty) return;
-      final res = await dio.get<String>('$base/index.json');
-      final raw = (res.data ?? '').replaceFirst('\uFEFF', '');
-      if (raw.isEmpty) return;
-      final list = jsonDecode(raw);
-      if (list is! List) return;
-      var changed = false;
-      for (final item in list) {
-        if (item is! Map) continue;
-        final pkg = item['package']?.toString() ?? '';
-        final ver = item['version']?.toString() ?? '';
-        final url = item['url']?.toString() ?? '';
-        if (pkg.isEmpty || ver.isEmpty || url.isEmpty) continue;
-        final rt = runtimes[pkg];
-        if (rt == null || rt.extension.version == ver) continue;
-        final savePath = path.join(extensionsDir, '$pkg.js');
-        try {
-          final js = (await dio.get<String>(url)).data;
-          if (js == null || js.isEmpty) continue;
-          final ext = parseExtension(js);
-          _loading.add(pkg);
-          try {
-            File(savePath).writeAsStringSync(js);
-            runtimes[pkg] = await ExtensionService().initRuntime(ext);
-            extensionErrorMap.remove(savePath);
-          } finally {
-            _loading.remove(pkg);
-          }
-          changed = true;
-        } catch (e) {
-          extensionErrorMap[savePath] = e.toString();
-        }
-      }
-      if (changed) _reloadPage();
-    } catch (_) {}
+  // La actualizacion automatica vive en ExtensionUpdateService. Estos helpers
+  // permiten instalar de forma atomica sin que el watcher de archivos vuelva a
+  // cargar la extension a medias.
+
+  static void beginExtensionUpdate(String package) {
+    _loading.add(package);
   }
+
+  static void endExtensionUpdate(String package) {
+    _loading.remove(package);
+  }
+
+  /// Relee una extension desde disco y reemplaza su runtime en caliente.
+  ///
+  /// La escritura previa es atomica (archivo temporal + rename), asi que si
+  /// esto falla se puede restaurar el respaldo sin dejar el archivo corrupto.
+  static Future<void> reloadPackage(String package) async {
+    final savePath = path.join(extensionsDir, '$package.js');
+    final content = await File(savePath).readAsString();
+    final ext = parseExtension(content);
+    runtimes[package] = await ExtensionService().initRuntime(ext);
+    extensionErrorMap.remove(savePath);
+  }
+
+  /// Refresca las pantallas que listan extensiones/catalogo tras un update.
+  static void refreshPages() => _safeReloadPage();
 
   static uninstall(String package) async {
     final file = File(path.join(extensionsDir, '$package.js'));

@@ -404,44 +404,36 @@ class _Footer extends StatelessWidget {
             Row(
               children: [
                 // 当前进度
-                StreamBuilder(
-                  stream: controller.player.stream.position,
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData) {
-                      final position = snapshot.data as Duration;
-                      return Text(
-                        '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w300,
-                        ),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
-                ),
+                // Se usa el Rx del controlador (suscrito desde onInit) en vez de
+                // escuchar player.stream directamente: el evento `duration` se
+                // emite una sola vez antes de que este pie se construya, así que
+                // un StreamBuilder creado aquí nunca lo recibe.
+                Obx(() {
+                  final position = controller.position.value;
+                  return Text(
+                    '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w300,
+                    ),
+                  );
+                }),
                 const SizedBox(width: 20),
                 Expanded(
                   child: _SeekBar(controller: controller),
                 ),
                 const SizedBox(width: 20),
                 // 总时长
-                StreamBuilder(
-                  stream: controller.player.stream.duration,
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData) {
-                      final duration = snapshot.data as Duration;
-                      return Text(
-                        '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w300,
-                        ),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
-                ),
+                Obx(() {
+                  final duration = controller.duration.value;
+                  return Text(
+                    '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w300,
+                    ),
+                  );
+                }),
               ],
             ),
             const SizedBox(height: 10),
@@ -1165,15 +1157,25 @@ class _SeekBarState extends State<_SeekBar> {
   @override
   void initState() {
     super.initState();
+    // Sembrar con el estado actual: el evento `duration` puede haberse emitido
+    // antes de que la barra exista (el pie se crea al ocultar el loader).
+    position = widget.controller.position.value;
+    duration = widget.controller.duration.value;
     positionSubscription =
         widget.controller.player.stream.position.listen((event) {
-      if (!_isDrag) {
-        position = event;
+      if (!_isDrag && mounted) {
+        setState(() {
+          position = event;
+        });
       }
     });
     durationSubscription =
         widget.controller.player.stream.duration.listen((event) {
-      duration = event;
+      if (mounted) {
+        setState(() {
+          duration = event;
+        });
+      }
     });
   }
 
@@ -1186,11 +1188,18 @@ class _SeekBarState extends State<_SeekBar> {
 
   @override
   Widget build(BuildContext context) {
+    // `max` no puede ser 0 (Slider no puede dividir por cero) y `value` debe
+    // quedar dentro del rango. Si el VOD aún no reportó duración, se muestra
+    // un rango mínimo de 1 s mientras llega el dato.
+    final maxSeconds = duration.inSeconds < position.inSeconds
+        ? position.inSeconds
+        : duration.inSeconds;
+    final maxValue = maxSeconds > 0 ? maxSeconds.toDouble() : 1.0;
+    final currentValue =
+        position.inSeconds.toDouble().clamp(0.0, maxValue).toDouble();
     return Slider(
-      value: (position.inSeconds).toDouble(),
-      max: duration.inSeconds < position.inSeconds
-          ? position.inSeconds.toDouble()
-          : duration.inSeconds.toDouble(),
+      value: currentValue,
+      max: maxValue,
       label:
           '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}',
       onChanged: (value) {

@@ -23,11 +23,13 @@ import 'package:jiruhub/utils/request.dart';
 import 'package:jiruhub/utils/router.dart';
 import 'package:jiruhub/views/dialogs/bt_dialog.dart';
 import 'package:jiruhub/controllers/home_controller.dart';
+import 'package:jiruhub/controllers/detail_controller.dart';
 import 'package:jiruhub/controllers/main_controller.dart';
 import 'package:jiruhub/router/router.dart';
 import 'package:jiruhub/utils/bt_server.dart';
 import 'package:jiruhub/data/services/database_service.dart';
 import 'package:jiruhub/data/services/extension_service.dart';
+import 'package:jiruhub/services/media/media_proxy_server.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/layout.dart';
 import 'package:jiruhub/utils/jiruhub_directory.dart';
@@ -536,14 +538,25 @@ class VideoPlayerController extends GetxController {
     try {
       player.pause();
     } catch (_) {}
+    // En Windows, media_kit reinicia `position`/`duration` y el frame actual al
+    // llamar `player.stop()`. Guardar después deja el historial en 0:00 y sin
+    // carátula, por lo que no se puede reanudar ni empezar desde el principio
+    // conservando el punto de reproducción. Guardamos antes de detener.
+    if (Platform.isWindows) {
+      try {
+        await _saveHistory();
+      } catch (_) {}
+    }
     try {
       await player.stop();
       // Dar tiempo a libmpv para liquidar su estado antes de dispose
       await Future.delayed(const Duration(milliseconds: 400));
     } catch (_) {}
-    try {
-      await _saveHistory();
-    } catch (_) {}
+    if (!Platform.isWindows) {
+      try {
+        await _saveHistory();
+      } catch (_) {}
+    }
     try {
       player.dispose();
     } catch (e) {
@@ -554,6 +567,10 @@ class VideoPlayerController extends GetxController {
     } catch (_) {}
     _hlsServer = null;
     _hlsPlaylistBody = null;
+    try {
+      await MediaProxyServer.instance.releaseSession(_proxySessionToken);
+    } catch (_) {}
+    _proxySessionToken = null;
     logger.info('dispose video controller');
     super.onClose();
   }
@@ -1442,6 +1459,11 @@ class VideoPlayerController extends GetxController {
         ..totalProgress = duration.value.inSeconds.toString(),
     );
     await Get.find<HomePageController>().onRefresh();
+    // Refrescar la ficha que quedó debajo del reproductor para que el botón
+    // "Seguir viendo" aparezca al volver, sin tener que reiniciar la app.
+    if (Platform.isWindows && Get.isRegistered<DetailPageController>()) {
+      await Get.find<DetailPageController>().getHistory();
+    }
   }
 
   // 判断文件是否是字幕
@@ -1672,8 +1694,20 @@ class VideoPlayerController extends GetxController {
     if (isExoPlayerActive) {
       return await _tryOpenExo(url, headers);
     } else {
-      return await _tryOpenPlayer(url, headers);
+      final hintHls = watchData?.type == ExtensionWatchBangumiType.hls;
+      return await _tryOpenPlayer(url, headers, hintHls: hintHls);
     }
+  }
+
+  /// Solo se intenta el proxy para fuentes HLS. Las fuentes directas (MP4,
+  /// DoodStream, etc.) siguen usando la URL original: no se fuerza el proxy.
+  bool _shouldTryProxy(String url, bool hintHls) {
+    if (hintHls) return true;
+    final lower = url.toLowerCase();
+    return lower.contains('.m3u8') ||
+        lower.contains('m3u8') ||
+        lower.contains('.txt') ||
+        lower.contains('/hls/');
   }
 
   /// Servidor HTTP en loopback que entrega el playlist HLS prefetcheado.
@@ -1684,6 +1718,9 @@ class VideoPlayerController extends GetxController {
   /// el playlist remoto, pero sin descargar los ~156 KB sin comprimir.
   HttpServer? _hlsServer;
   String? _hlsPlaylistBody;
+
+  /// Token de la sesion activa del proxy multimedia de Windows.
+  String? _proxySessionToken;
 
   /// Publica [body] en el servidor loopback y devuelve la URL para mpv.
   Future<String?> _serveHlsPlaylist(String body) async {
@@ -1818,7 +1855,11 @@ class VideoPlayerController extends GetxController {
 
   // Intenta abrir el player con la URL dada.
   // Retorna true solo si el stream REALMENTE empieza a reproducirse.
-  Future<bool> _tryOpenPlayer(String url, Map<String, String>? headers) async {
+  Future<bool> _tryOpenPlayer(
+    String url,
+    Map<String, String>? headers, {
+    bool hintHls = false,
+  }) async {
     final _tp0 = DateTime.now();
     logger.info('⏱ [player+0ms] _tryOpenPlayer START');
 
@@ -1873,10 +1914,34 @@ class VideoPlayerController extends GetxController {
       logger.warning('No se pudieron configurar propiedades mpv: $e');
     }
 
+    // Proxy multimedia local (solo Windows): HLS se sirve desde 127.0.0.1 con
+    // cache en disco de 300 MB y reescritura VOD/live. Si la fuente no es HLS
+    // o el proxy falla, se usa la URL original (fallback directo).
+    var playUrl = url;
+    var proxied = false;
+    if (Platform.isWindows && _shouldTryProxy(url, hintHls)) {
+      try {
+        await MediaProxyServer.instance.releaseSession(_proxySessionToken);
+        _proxySessionToken = null;
+        final localPlaylist =
+            await MediaProxyServer.instance.open(url, cleanHeaders);
+        if (localPlaylist != null) {
+          playUrl = localPlaylist;
+          proxied = true;
+          final segments = Uri.parse(localPlaylist).pathSegments;
+          if (segments.length > 1) _proxySessionToken = segments[1];
+          logger.info(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] proxy local HLS activo',
+          );
+        }
+      } catch (e) {
+        logger.warning('Proxy multimedia no disponible, fallback directo: $e');
+      }
+    }
+
     // Prefetch del playlist HLS: con gzip baja de ~156 KB a ~2.5 KB. Si no es
     // aplicable o falla, se usa la URL original sin penalizar el arranque.
-    var playUrl = url;
-    if (url.contains('.m3u8')) {
+    if (!proxied && url.contains('.m3u8')) {
       final pf0 = DateTime.now();
       final localPlaylist = await _prefetchHlsPlaylist(url, cleanHeaders);
       final pfMs = DateTime.now().difference(pf0).inMilliseconds;

@@ -16,6 +16,7 @@ import 'package:jiruhub/views/pages/main_page.dart';
 import 'package:jiruhub/views/pages/splash_page.dart';
 import 'package:jiruhub/router/router.dart';
 import 'package:jiruhub/utils/extension.dart';
+import 'package:jiruhub/services/extension/extension_update_service.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/jiruhub_storage.dart';
 import 'package:jiruhub/utils/application.dart';
@@ -63,6 +64,8 @@ void main(List<String> args) async {
     await ApplicationUtils.ensureInitialized();
     await MiruRequest.ensureInitialized();
     await ExtensionUtils.ensureInitialized();
+    // Actualizador de extensiones independiente del actualizador de la app.
+    ExtensionUpdateService.instance.start();
     MediaKit.ensureInitialized();
     Get.put(DownloadService(), permanent: true);
 

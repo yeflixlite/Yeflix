@@ -5,7 +5,6 @@ import 'package:jiruhub/models/extension.dart';
 import 'package:jiruhub/controllers/home_controller.dart';
 import 'package:jiruhub/controllers/main_controller.dart';
 import 'package:jiruhub/views/widgets/home/home_favorites.dart';
-import 'package:jiruhub/views/widgets/home/home_recent.dart';
 import 'package:jiruhub/views/widgets/home/home_catalog.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/yeflix_style.dart';
@@ -81,7 +80,6 @@ class _HomePageState extends State<HomePage> {
       () {
         final favBangumi = c.favorites[ExtensionType.bangumi] ?? const [];
         final favManga = c.favorites[ExtensionType.manga] ?? const [];
-        final hasRecent = c.resents.isNotEmpty;
         final hasFav = favBangumi.isNotEmpty || favManga.isNotEmpty;
 
         return RefreshIndicator(
@@ -95,10 +93,6 @@ class _HomePageState extends State<HomePage> {
             children: [
               const HomeHeroBanner(),
               const SizedBox(height: 18),
-              if (hasRecent) ...[
-                HomeRecent(data: c.resents),
-                const SizedBox(height: 18),
-              ],
               const HomeCatalog(),
               if (favBangumi.isNotEmpty) ...[
                 HomeFavorites(type: ExtensionType.bangumi, data: favBangumi),
@@ -108,8 +102,7 @@ class _HomePageState extends State<HomePage> {
                 HomeFavorites(type: ExtensionType.manga, data: favManga),
                 const SizedBox(height: 8),
               ],
-              if (!hasRecent &&
-                  !hasFav &&
+              if (!hasFav &&
                   c.animes.isEmpty &&
                   c.movies.isEmpty &&
                   c.series.isEmpty)
