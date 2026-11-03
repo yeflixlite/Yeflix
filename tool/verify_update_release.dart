@@ -50,11 +50,12 @@ Future<void> main() async {
   }
 
   UpdateCheckResult android(int code, bool universal, bool tablet,
-          List<String> abis) =>
+          List<String> abis,
+          {String localVersion = '1.0.2'}) =>
       UpdateAssetSelector.evaluate(
         release: resolved,
         environment: UpdateEnvironment(
-          localVersion: AppVersion.parse('1.0.2'),
+          localVersion: AppVersion.parse(localVersion),
           localBuildNumber: code,
           platform: UpdatePlatform.android,
           supportedAbis: abis,
@@ -63,36 +64,49 @@ Future<void> main() async {
         ),
       );
 
-  final arm64 = android(93, false, false, const ['arm64-v8a']);
-  check('v9 arm64 detecta v10', arm64.hasUpdate && arm64.localBuild == 9,
-      'local=${arm64.localBuild} asset=${arm64.asset?.name}');
+  final arm64 = android(103, false, false, const ['arm64-v8a']);
+  check(
+      '1.0.2/10 arm64 detecta 1.0.3 y usa el APK arm64',
+      arm64.hasUpdate &&
+          arm64.localBuild == 10 &&
+          arm64.asset?.name == 'Yeflix-1.0.3-11-arm64-v8a.apk' &&
+          arm64.asset?.androidVersionCode == 113,
+      'local=${arm64.localBuild} asset=${arm64.asset?.name} code=${arm64.asset?.androidVersionCode}');
 
-  final v10 = android(103, false, false, const ['arm64-v8a']);
-  check('v10 arm64 no se auto-ofrece', !v10.hasUpdate,
-      'local=${v10.localBuild}');
+  final current = android(113, false, false, const ['arm64-v8a'],
+      localVersion: '1.0.3');
+  check('1.0.3/11 arm64 no se auto-ofrece', !current.hasUpdate,
+      'local=${current.localBuild}');
 
-  final arm = android(92, false, false, const ['armeabi-v7a']);
-  check('v9 armeabi detecta v10', arm.hasUpdate,
+  final arm = android(102, false, false, const ['armeabi-v7a']);
+  check(
+      '1.0.2/10 armeabi detecta 1.0.3',
+      arm.hasUpdate &&
+          arm.asset?.name == 'Yeflix-1.0.3-11-armeabi-v7a.apk',
       'asset=${arm.asset?.name}');
 
-  final x64 = android(91, false, false, const ['x86_64']);
-  check('v9 x86_64 detecta v10', x64.hasUpdate, 'asset=${x64.asset?.name}');
+  final x64 = android(101, false, false, const ['x86_64']);
+  check('1.0.2/10 x86_64 detecta 1.0.3',
+      x64.hasUpdate && x64.asset?.name == 'Yeflix-1.0.3-11-x86_64.apk',
+      'asset=${x64.asset?.name}');
 
   final tablet = android(
-    9,
+    10,
     true,
     true,
     const ['arm64-v8a', 'armeabi-v7a', 'x86_64'],
   );
-  check('tablet universal v9 detecta v10',
-      tablet.hasUpdate && tablet.asset?.isUniversalApk == true,
+  check('tablet universal 1.0.2/10 detecta 1.0.3',
+      tablet.hasUpdate &&
+          tablet.asset?.isUniversalApk == true &&
+          tablet.asset?.name == 'Yeflix-1.0.3-11-tablet.apk',
       'asset=${tablet.asset?.name}');
 
-  final tabletArm64 = android(93, false, true, const ['arm64-v8a']);
+  final tabletArm64 = android(103, false, true, const ['arm64-v8a']);
   check(
-      'tablet con v9 arm64 usa el APK de ABI (no el universal downgrade)',
+      'tablet con arm64 1.0.2/10 usa el APK de ABI (no el universal downgrade)',
       tabletArm64.hasUpdate &&
-          tabletArm64.asset?.name == 'Yeflix-1.0.2-10-arm64-v8a.apk',
+          tabletArm64.asset?.name == 'Yeflix-1.0.3-11-arm64-v8a.apk',
       'asset=${tabletArm64.asset?.name}');
 
   final phoneNeverTablet = UpdateAssetSelector.selectAndroidAsset(
@@ -106,30 +120,34 @@ Future<void> main() async {
   check('teléfono sin ABI compatible no recibe tablet',
       phoneNeverTablet == null, 'asset=${phoneNeverTablet?.name}');
 
-  UpdateCheckResult windows(UpdatePlatform platform, int localBuild) =>
+  UpdateCheckResult windows(UpdatePlatform platform, int localBuild,
+          {String localVersion = '1.0.2'}) =>
       UpdateAssetSelector.evaluate(
         release: resolved,
         environment: UpdateEnvironment(
-          localVersion: AppVersion.parse('1.0.2'),
+          localVersion: AppVersion.parse(localVersion),
           localBuildNumber: localBuild,
           platform: platform,
         ),
       );
 
-  final portable = windows(UpdatePlatform.windowsPortable, 9);
-  check('Windows portable usa ZIP',
+  final portable = windows(UpdatePlatform.windowsPortable, 10);
+  check('Windows portable 1.0.2/10 usa el ZIP de 1.0.3',
       portable.hasUpdate &&
-          portable.asset?.kind == UpdateAssetKind.windowsZip,
+          portable.asset?.kind == UpdateAssetKind.windowsZip &&
+          portable.asset?.name == 'Yeflix-v1.0.3-Windows-x64.zip',
       'asset=${portable.asset?.name}');
 
-  final installed = windows(UpdatePlatform.windowsInstalled, 9);
-  check('Windows instalado usa EXE',
+  final installed = windows(UpdatePlatform.windowsInstalled, 10);
+  check('Windows instalado 1.0.2/10 usa el instalador de 1.0.3',
       installed.hasUpdate &&
-          installed.asset?.kind == UpdateAssetKind.windowsInstaller,
+          installed.asset?.kind == UpdateAssetKind.windowsInstaller &&
+          installed.asset?.name == 'Yeflix-v1.0.3-Windows-Installer.exe',
       'asset=${installed.asset?.name}');
 
-  final winCurrent = windows(UpdatePlatform.windowsPortable, 10);
-  check('Windows build 10 no se auto-ofrece', !winCurrent.hasUpdate,
+  final winCurrent = windows(UpdatePlatform.windowsPortable, 11,
+      localVersion: '1.0.3');
+  check('Windows 1.0.3/11 no se auto-ofrece', !winCurrent.hasUpdate,
       'local=${winCurrent.localBuild}');
 
   client.close();
