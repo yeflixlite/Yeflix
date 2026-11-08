@@ -1,68 +1,84 @@
-import { useState } from 'react';
-import { motion } from 'motion/react';
-import { Copy, Check } from 'lucide-react';
+import { Monitor, ShieldCheck, AlertTriangle } from 'lucide-react';
 import Navbar from '../components/Navbar';
+import Footer from '../components/Footer';
+import DownloadCard from '../components/DownloadCard';
+import { release, windowsAssets } from '../data/releases';
 
-const installCommand = 'irm https://raw.githubusercontent.com/jephersonRD/JiruHub/main/jiru-install/install.ps1 | iex';
+const steps = [
+  'Descarga el instalador (.exe) o el portable (.zip).',
+  'Si elegiste el instalador, ejecútalo y sigue el asistente.',
+  'Si elegiste el portable, descomprime el ZIP y ejecuta yeflix.exe.',
+  'Abre Yeflix y configura el repositorio de extensiones desde Ajustes.',
+];
 
 export default function Windows() {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(installCommand);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   return (
-    <div className="w-full h-screen flex items-center justify-center p-3 md:p-5 bg-[#f0f0f0]">
-      <section className="relative w-full max-w-[1536px] h-full rounded-[1.5rem] md:rounded-[3rem] overflow-hidden shadow-none flex flex-col items-center bg-white/10 group">
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover object-[65%] lg:object-center z-0 blur-xl opacity-40"
-        >
-          <source src="/JiruHub/assets/media/jiruhub.mp4" type="video/mp4" />
-        </video>
-        <div className="relative z-10 w-full h-full flex flex-col items-center">
-          <Navbar light />
-          <div className="flex-1 flex items-center justify-center px-6 w-full">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6 }}
-              className="w-full max-w-lg"
-            >
-              <div className="flex items-center gap-2 mb-4 justify-center">
-                <svg fill="currentColor" strokeWidth="0" viewBox="0 0 448 512" className="w-5 h-5 text-[rgba(30,50,90,0.8)]">
-                  <path d="M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z" />
-                </svg>
-                <span className="text-[rgba(30,50,90,0.9)] text-lg font-normal">Instalar en Windows</span>
-              </div>
-              <div className="flex items-stretch gap-0 bg-[rgba(30,50,90,0.05)] rounded-full border border-[rgba(30,50,90,0.1)]">
-                <pre className="flex-1 overflow-x-auto text-sm font-mono text-[rgba(30,50,90,0.9)] leading-relaxed px-5 py-3.5 whitespace-nowrap scrollbar-thin">
-                  <code>{installCommand}</code>
-                </pre>
-                <button
-                  onClick={handleCopy}
-                  className="flex items-center justify-center px-5 py-3.5 bg-[rgba(30,50,90,0.08)] hover:bg-[rgba(30,50,90,0.12)] transition-colors rounded-r-full"
-                >
-                  {copied ? (
-                    <Check className="w-4 h-4 text-green-600" />
-                  ) : (
-                    <Copy className="w-4 h-4 text-[rgba(30,50,90,0.8)]" />
-                  )}
-                </button>
-              </div>
-              <p className="mt-3 text-[12px] text-[rgba(30,50,90,0.5)] font-normal text-center">
-                Pega esto en tu PowerShell
-              </p>
-            </motion.div>
-          </div>
+    <>
+      <Navbar />
+      <main className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6">
+        <div className="max-w-2xl">
+          <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs font-medium text-white/60">
+            <Monitor className="h-3.5 w-3.5" /> Windows · v{release.version} build {release.build}
+          </span>
+          <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-white sm:text-5xl">
+            Descargar para Windows
+          </h1>
+          <p className="mt-4 text-base leading-relaxed text-white/55">
+            Dos opciones: el instalador clásico o la versión portable que no necesita
+            instalación. Ambas son para Windows de 64 bits.
+          </p>
         </div>
-      </section>
-    </div>
+
+        <section className="mt-10">
+          <h2 className="text-lg font-semibold text-white">Elige el formato</h2>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            {windowsAssets.map((asset) => (
+              <DownloadCard key={asset.id} asset={asset} />
+            ))}
+          </div>
+        </section>
+
+        <section className="mt-14 grid gap-8 md:grid-cols-[1.1fr_1fr]">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Cómo instalarlo</h2>
+            <ol className="mt-4 space-y-4">
+              {steps.map((step, index) => (
+                <li key={step} className="flex gap-3 text-sm leading-relaxed text-white/55">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/[0.07] text-xs font-semibold text-white/80">
+                    {index + 1}
+                  </span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+
+            <div className="mt-6 flex items-start gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-4 text-sm text-white/60">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
+              <p>
+                Si Windows SmartScreen muestra una advertencia, pulsa
+                <span className="text-white"> “Más información” → “Ejecutar de todos modos”</span>.
+                El instalador no está firmado con un certificado comercial.
+              </p>
+            </div>
+          </div>
+
+          <aside className="rounded-2xl border border-white/[0.08] bg-[#0d0d13] p-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+              <ShieldCheck className="h-4 w-4 text-brand-strong" /> Requisitos
+            </div>
+            <ul className="mt-3 space-y-2 text-sm text-white/50">
+              <li>Windows 10 u 11 de 64 bits.</li>
+              <li>~150 MB libres para instalar.</li>
+              <li>Reproductor y descargas incluidos; no requiere programas extra.</li>
+            </ul>
+            <p className="mt-4 text-xs leading-relaxed text-white/35">
+              La versión portable se ejecuta desde cualquier carpeta y puedes moverla
+              con una USB.
+            </p>
+          </aside>
+        </section>
+      </main>
+      <Footer />
+    </>
   );
 }

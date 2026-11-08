@@ -1,28 +1,21 @@
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Route, Routes } from 'react-router-dom';
 import Home from './pages/Home';
-import Linux from './pages/Linux';
-import Faq from './pages/Faq';
+import Android from './pages/Android';
 import Windows from './pages/Windows';
-import Docs from './pages/Docs';
-import Developers from './pages/Developers';
-import License from './pages/License';
+import Faq from './pages/Faq';
 
-function App() {
+export default function App() {
   return (
     <HashRouter>
-      <main className="min-h-screen bg-[#f0f0f0]">
+      <div className="min-h-screen bg-[#07070a]">
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/linux" element={<Linux />} />
-          <Route path="/faq" element={<Faq />} />
+          <Route path="/android" element={<Android />} />
           <Route path="/windows" element={<Windows />} />
-          <Route path="/docs" element={<Docs />} />
-          <Route path="/developers" element={<Developers />} />
-          <Route path="/license" element={<License />} />
+          <Route path="/faq" element={<Faq />} />
+          <Route path="*" element={<Home />} />
         </Routes>
-      </main>
+      </div>
     </HashRouter>
   );
 }
-
-export default App;

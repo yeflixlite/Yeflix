@@ -1,47 +1,35 @@
 @import "tailwindcss";
 
-@font-face {
-    font-family: "Helvetica Regular";
-    src: url("https://db.onlinewebfonts.com/t/a64ff11d2c24584c767f6257e880dc65.eot");
-    src: url("https://db.onlinewebfonts.com/t/a64ff11d2c24584c767f6257e880dc65.eot?#iefix")format("embedded-opentype"),
-    url("https://db.onlinewebfonts.com/t/a64ff11d2c24584c767f6257e880dc65.woff2")format("woff2"),
-    url("https://db.onlinewebfonts.com/t/a64ff11d2c24584c767f6257e880dc65.woff")format("woff"),
-    url("https://db.onlinewebfonts.com/t/a64ff11d2c24584c767f6257e880dc65.ttf")format("truetype"),
-    url("https://db.onlinewebfonts.com/t/a64ff11d2c24584c767f6257e880dc65.svg#Helvetica Regular")format("svg");
-}
-
 @theme {
-  --font-helvetica: "Helvetica Regular", ui-sans-serif, system-ui, sans-serif;
+  --color-brand: #e50914;
+  --color-brand-strong: #ff2230;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
-:root {
-  font-family: var(--font-helvetica);
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
-  overflow-x: hidden;
-  background-color: #f0f0f0;
+  background-color: #07070a;
+  color: #f5f5f7;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.scrollbar-thin::-webkit-scrollbar {
-  height: 4px;
+::selection {
+  background: rgba(229, 9, 20, 0.4);
 }
 
-.scrollbar-thin::-webkit-scrollbar-track {
-  background: transparent;
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 48px 48px;
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgba(30, 50, 90, 0.2);
-  border-radius: 999px;
-}
-
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background: rgba(30, 50, 90, 0.35);
-}
-
-.scrollbar-thin {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(30, 50, 90, 0.2) transparent;
+.glow-brand {
+  box-shadow: 0 20px 80px -20px rgba(229, 9, 20, 0.55);
 }

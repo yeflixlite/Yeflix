@@ -1,56 +1,55 @@
-import { ChevronRight, ArrowUpRight } from 'lucide-react';
-import { motion } from 'motion/react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
+import Logo from './Logo';
+import GithubIcon from './GithubIcon';
+import { release } from '../data/releases';
 
-function NavItem({ label, hasDropdown, to }: { label: string; hasDropdown?: boolean; to?: string }) {
-  if (to) {
-    return (
-      <li className="cursor-pointer hover:opacity-70 transition-opacity flex items-center gap-1 group">
-        <Link to={to}>{label}</Link>
-        {hasDropdown && (
-          <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
-        )}
-      </li>
-    );
-  }
-  return (
-    <li className="cursor-pointer hover:opacity-70 transition-opacity flex items-center gap-1 group">
-      {label}
-      {hasDropdown && (
-        <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
-      )}
-    </li>
-  );
-}
+const links = [
+  { label: 'Inicio', to: '/' },
+  { label: 'Android', to: '/android' },
+  { label: 'Windows', to: '/windows' },
+  { label: 'Preguntas', to: '/faq' },
+];
 
-export default function Navbar({ light }: { light?: boolean }) {
+export default function Navbar() {
+  const { pathname } = useLocation();
+
   return (
-    <nav className="flex items-center justify-between py-6 px-6 md:px-10 w-full relative z-10">
-      <div className="flex-1 hidden md:block" />
-      <ul className={`hidden md:flex items-center gap-8 font-normal text-sm ${light ? 'text-[rgb(45,45,45)]' : 'text-white'}`}>
-        <NavItem label="Home" to="/" />
-        <NavItem label="FAQ" to="/faq" />
-        <NavItem label="Desarrolladores" to="/developers" />
-        <NavItem label="Licencia" to="/license" />
-      </ul>
-      <div className="md:hidden">
-        <span className="font-regular tracking-tighter text-xl text-[rgba(30,50,90,0.9)]">RIVR</span>
-      </div>
-      <div className="flex-1 flex justify-end">
-        <motion.a
-          href="https://github.com/jephersonRD/JiruHub"
+    <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#07070a]/85 backdrop-blur-xl">
+      <nav className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
+        <Link to="/" className="shrink-0" aria-label="Yeflix inicio">
+          <Logo />
+        </Link>
+
+        <ul className="hidden items-center gap-1 md:flex">
+          {links.map((link) => {
+            const active = link.to === '/' ? pathname === '/' : pathname.startsWith(link.to);
+            return (
+              <li key={link.to}>
+                <Link
+                  to={link.to}
+                  className={`rounded-full px-4 py-2 text-sm transition-colors ${
+                    active
+                      ? 'bg-white/10 text-white'
+                      : 'text-white/60 hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+
+        <a
+          href={release.repo}
           target="_blank"
           rel="noopener noreferrer"
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-          className="flex items-center bg-white text-[rgba(30,50,90,0.9)] rounded-full pl-2 pr-4 md:pr-6 py-1.5 md:py-2 gap-2 md:gap-3 hover:bg-white/80 transition-colors group"
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-sm text-white/80 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white"
         >
-          <div className="bg-[rgba(30,50,90,0.1)] p-1 md:p-1.5 rounded-full flex items-center justify-center">
-            <ArrowUpRight className="w-4 h-4 md:w-5 md:h-5 text-[rgba(30,50,90,0.9)]" />
-          </div>
-          <span className="text-xs md:text-sm font-normal">Github oficial</span>
-        </motion.a>
-      </div>
-    </nav>
+          <GithubIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">GitHub</span>
+        </a>
+      </nav>
+    </header>
   );
 }
