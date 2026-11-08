@@ -22,13 +22,27 @@ export default function Hero() {
       video.playbackRate = 0.2;
     };
 
-    slowMotion();
-    video.addEventListener('loadedmetadata', slowMotion);
+    const tryPlay = () => {
+      slowMotion();
+      const attempt = video.play();
+      if (attempt) attempt.catch(() => {});
+    };
+
+    tryPlay();
+    video.addEventListener('loadedmetadata', tryPlay);
+    video.addEventListener('canplay', tryPlay);
     video.addEventListener('play', slowMotion);
+    document.addEventListener('pointerdown', tryPlay);
+    document.addEventListener('touchstart', tryPlay);
+    document.addEventListener('visibilitychange', tryPlay);
 
     return () => {
-      video.removeEventListener('loadedmetadata', slowMotion);
+      video.removeEventListener('loadedmetadata', tryPlay);
+      video.removeEventListener('canplay', tryPlay);
       video.removeEventListener('play', slowMotion);
+      document.removeEventListener('pointerdown', tryPlay);
+      document.removeEventListener('touchstart', tryPlay);
+      document.removeEventListener('visibilitychange', tryPlay);
     };
   }, []);
 
@@ -41,8 +55,9 @@ export default function Hero() {
         loop
         playsInline
         preload="auto"
+        poster={`${base}mascota-poster.jpg`}
         aria-hidden="true"
-        className="absolute inset-0 h-full w-full object-cover opacity-65"
+        className="absolute inset-0 h-full w-full object-cover opacity-80"
       >
         <source src={`${base}mascota.mp4`} type="video/mp4" />
       </video>
