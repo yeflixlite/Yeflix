@@ -123,6 +123,13 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+# QuickJS para las extensiones JavaScript (package:flutter_js). El plugin no
+# copia esta librería al bundle, así que la incluimos aquí: de este modo la app
+# no depende de librerías del sistema como libjavascriptcoregtk-4.0.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/libs/libquickjs_c_bridge_plugin.so"
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
 # Fully re-copy the assets directory on each build to avoid having stale files
 # from a previous install.
 set(FLUTTER_ASSET_DIR_NAME "flutter_assets")
