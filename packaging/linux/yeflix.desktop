@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Yeflix
+GenericName=Reproductor de video
+Comment=Anime, películas y series en español
+Exec=yeflix %U
+Icon=yeflix
+Terminal=false
+Categories=AudioVideo;Video;Player;
+Keywords=anime;peliculas;series;streaming;
+StartupWMClass=yeflix

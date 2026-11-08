@@ -1,0 +1,124 @@
+name: Linux Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libmpv-dev mpv libfuse2 patchelf desktop-file-utils
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.22.2
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Linux
+        run: flutter build linux --release
+
+      - name: Package tarball
+        id: package
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          BUNDLE=build/linux/x64/release/bundle
+          PKG="Yeflix-${VERSION}-Linux-x64"
+          rm -rf "$PKG"
+          mkdir -p "$PKG"
+          cp -r "$BUNDLE"/* "$PKG"/
+          cp assets/icon/logo.png "$PKG/yeflix.png"
+          cp packaging/linux/install.sh "$PKG/install.sh"
+          chmod +x "$PKG/install.sh" "$PKG/yeflix"
+          tar -czf "$PKG.tar.gz" "$PKG"
+          echo "tarball=$PKG.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          ls -lh "$PKG.tar.gz"
+
+      - name: Build AppImage
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.package.outputs.version }}"
+          BUNDLE=build/linux/x64/release/bundle
+          APPDIR=AppDir
+
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin" \
+                   "$APPDIR/usr/share/applications" \
+                   "$APPDIR/usr/share/icons/hicolor/512x512/apps"
+
+          cp -r "$BUNDLE"/* "$APPDIR/usr/bin/"
+          cp assets/icon/logo.png "$APPDIR/yeflix.png"
+          cp assets/icon/logo.png "$APPDIR/usr/share/icons/hicolor/512x512/apps/yeflix.png"
+          cp packaging/linux/yeflix.desktop "$APPDIR/yeflix.desktop"
+          cp packaging/linux/yeflix.desktop "$APPDIR/usr/share/applications/yeflix.desktop"
+
+          export APPIMAGE_EXTRACT_AND_RUN=1
+
+          wget -q -O linuxdeploy.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy.AppImage
+          ./linuxdeploy.AppImage \
+            --appdir "$APPDIR" \
+            --executable "$APPDIR/usr/bin/yeflix" \
+            --library /usr/lib/x86_64-linux-gnu/libmpv.so.2 \
+            --desktop-file "$APPDIR/yeflix.desktop" \
+            --icon-file "$APPDIR/yeflix.png"
+
+          # AppRun propio: garantiza que libapp.so y libmpv se encuentren.
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export LD_LIBRARY_PATH="$HERE/usr/bin/lib:$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/usr/bin/yeflix" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          wget -q -O appimagetool.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool.AppImage
+          ARCH=x86_64 ./appimagetool.AppImage "$APPDIR" "Yeflix-${VERSION}-Linux-x86_64.AppImage"
+          ls -lh Yeflix-*.AppImage
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yeflix-Linux
+          path: |
+            ${{ steps.package.outputs.tarball }}
+            Yeflix-*-Linux-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v1.0.3"
+          fi
+          gh release upload "$TAG" \
+            "${{ steps.package.outputs.tarball }}" \
+            Yeflix-*-Linux-x86_64.AppImage \
+            --clobber
