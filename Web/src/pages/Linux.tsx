@@ -150,7 +150,7 @@ export default function Linux() {
               <li>Linux de 64 bits (x86_64).</li>
               <li>glibc 2.35 o superior (Ubuntu 22.04+, Debian 12+, Fedora 36+…).</li>
               <li>Escritorio con GTK 3 (GNOME, KDE, XFCE, Cinnamon…).</li>
-              <li>~250 MB libres para instalar.</li>
+              <li>~350 MB libres para instalar.</li>
             </ul>
             <div className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.06] p-3 text-xs leading-relaxed text-white/55">
               <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
