@@ -20,16 +20,6 @@ import 'package:jiruhub/data/services/database_service.dart';
 import 'package:jiruhub/utils/extension.dart';
 import 'package:flutter_js/javascriptcore/jscore_runtime.dart';
 
-/// En Linux usa QuickJS, que ya viene incluido en el paquete. Si por algún
-/// motivo no se pudiera cargar, intenta con el JavaScriptCore del sistema.
-JavascriptRuntime _createLinuxRuntime() {
-  try {
-    return QuickJsRuntime2(stackSize: 1024 * 1024);
-  } catch (_) {
-    return JavascriptCoreRuntime();
-  }
-}
-
 class ExtensionService {
   late JavascriptRuntime runtime;
   late Extension extension;
@@ -59,10 +49,7 @@ class ExtensionService {
     } else if (Platform.isWindows) {
       runtime = QuickJsRuntime2(stackSize: 1024 * 1024);
     } else if (Platform.isLinux) {
-      // QuickJS viaja dentro de la app (libquickjs_c_bridge_plugin.so), así
-      // que no depende de libjavascriptcoregtk-4.0, que no está disponible
-      // en todas las distribuciones.
-      runtime = _createLinuxRuntime();
+      runtime = JavascriptCoreRuntime();
     } else {
       runtime = JavascriptCoreRuntime();
     }

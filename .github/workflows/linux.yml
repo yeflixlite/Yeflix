@@ -27,7 +27,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libmpv-dev mpv libfuse2 patchelf desktop-file-utils
+            libmpv-dev mpv libfuse2 patchelf desktop-file-utils \
+            libjavascriptcoregtk-4.0-18
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -72,6 +73,15 @@ jobs:
           fi
           echo "libmpv: $MPV_LIB"
 
+          # JavaScriptCore: lo usan las extensiones JavaScript (flutter_js).
+          # Lo empaquetamos para que no haya que instalarlo en la distro.
+          JSC_LIB=$(ldconfig -p | awk '/libjavascriptcoregtk-4\.0\.so\.18/ {print $NF; exit}')
+          if [ -z "$JSC_LIB" ]; then
+            echo "No se encontró libjavascriptcoregtk-4.0.so.18 en el sistema" >&2
+            exit 1
+          fi
+          echo "javascriptcore: $JSC_LIB"
+
           wget -q -O linuxdeploy.AppImage \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy.AppImage
@@ -79,6 +89,7 @@ jobs:
             --appdir "$APPDIR" \
             --executable "$APPDIR/usr/bin/yeflix" \
             --library "$MPV_LIB" \
+            --library "$JSC_LIB" \
             --desktop-file "$APPDIR/yeflix.desktop" \
             --icon-file "$APPDIR/yeflix.png"
 
