@@ -8,7 +8,7 @@ export const release = {
   base: 'https://github.com/yeflixlite/Yeflix/releases/download/v1.0.3',
 } as const;
 
-export type AssetIcon = 'phone' | 'tablet' | 'cpu' | 'installer' | 'portable';
+export type AssetIcon = 'phone' | 'tablet' | 'cpu' | 'installer' | 'portable' | 'mac';
 
 export type Asset = {
   id: string;
@@ -74,6 +74,19 @@ export const windowsAssets: Asset[] = [
     file: 'Yeflix-v1.0.3-Windows-x64.zip',
     size: '34.1 MB',
     icon: 'portable',
+  },
+];
+
+export const macosAssets: Asset[] = [
+  {
+    id: 'universal',
+    name: 'macOS (universal)',
+    description:
+      'Para Mac con Apple Silicon (M1, M2, M3, M4) o Intel. Descomprime el ZIP y arrastra Yeflix a Aplicaciones.',
+    file: 'Yeflix-1.0.3-macOS.zip',
+    size: '41.7 MB',
+    badge: 'Recomendado',
+    icon: 'mac',
   },
 ];
 

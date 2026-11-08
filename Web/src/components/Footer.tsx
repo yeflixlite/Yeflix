@@ -11,7 +11,7 @@ export default function Footer() {
         <div>
           <Logo />
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/50">
-            Anime, películas y series en español. Una app ligera para Android y Windows,
+            Anime, películas y series en español. Una app ligera para Android, Windows y macOS,
             con reproductor propio y soporte de extensiones.
           </p>
         </div>
@@ -29,6 +29,11 @@ export default function Footer() {
             <li>
               <Link to="/windows" className="transition-colors hover:text-white">
                 Windows
+              </Link>
+            </li>
+            <li>
+              <Link to="/macos" className="transition-colors hover:text-white">
+                macOS
               </Link>
             </li>
             <li>

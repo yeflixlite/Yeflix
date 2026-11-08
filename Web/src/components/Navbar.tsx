@@ -7,6 +7,7 @@ const links = [
   { label: 'Inicio', to: '/' },
   { label: 'Android', to: '/android' },
   { label: 'Windows', to: '/windows' },
+  { label: 'macOS', to: '/macos' },
   { label: 'Preguntas', to: '/faq' },
 ];
 

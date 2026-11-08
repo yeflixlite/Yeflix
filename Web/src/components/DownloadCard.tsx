@@ -1,4 +1,4 @@
-import { Cpu, Download, HardDrive, Package, Smartphone, Tablet } from 'lucide-react';
+import { Apple, Cpu, Download, HardDrive, Package, Smartphone, Tablet } from 'lucide-react';
 import type { Asset } from '../data/releases';
 import { assetUrl } from '../data/releases';
 
@@ -8,6 +8,7 @@ const icons = {
   cpu: Cpu,
   installer: Package,
   portable: HardDrive,
+  mac: Apple,
 };
 
 export default function DownloadCard({ asset }: { asset: Asset }) {

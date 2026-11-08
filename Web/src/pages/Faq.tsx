@@ -21,6 +21,10 @@ const faqs = [
     a: 'Es el aviso de SmartScreen porque el instalador no tiene un certificado comercial. Pulsa “Más información” y luego “Ejecutar de todos modos”. También puedes usar la versión portable en ZIP.',
   },
   {
+    q: 'macOS no abre la app. ¿Qué hago?',
+    a: 'La app no está firmada con un certificado de Apple, así que macOS la bloquea la primera vez. Ábrela con clic derecho → Abrir, o ve a Ajustes del Sistema → Privacidad y seguridad y pulsa “Abrir igualmente”. Si sigue bloqueada, ejecuta en Terminal: xattr -dr com.apple.quarantine /Applications/Yeflix.app',
+  },
+  {
     q: '¿La app se actualiza sola?',
     a: `Yeflix comprueba si hay versiones nuevas y te avisa. La versión actual es ${release.version} (build ${release.build}); puedes ver todas las versiones en GitHub Releases.`,
   },
@@ -43,7 +47,7 @@ export default function Faq() {
           Preguntas frecuentes
         </h1>
         <p className="mt-4 text-base text-white/55">
-          Todo lo necesario para instalar Yeflix en Android o Windows.
+          Todo lo necesario para instalar Yeflix en Android, Windows o macOS.
         </p>
 
         <div className="mt-10 space-y-3">
