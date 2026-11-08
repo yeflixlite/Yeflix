@@ -1,6 +1,9 @@
+import { useEffect, useRef } from 'react';
 import { ShieldCheck, Smartphone, Monitor, Sparkles } from 'lucide-react';
 import DownloadButtons from './DownloadButtons';
 import { release } from '../data/releases';
+
+const base = import.meta.env.BASE_URL;
 
 const facts = [
   { icon: ShieldCheck, label: 'Sin publicidad intrusiva' },
@@ -9,9 +12,49 @@ const facts = [
 ];
 
 export default function Hero() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const slowMotion = () => {
+      video.playbackRate = 0.2;
+    };
+
+    slowMotion();
+    video.addEventListener('loadedmetadata', slowMotion);
+    video.addEventListener('play', slowMotion);
+
+    return () => {
+      video.removeEventListener('loadedmetadata', slowMotion);
+      video.removeEventListener('play', slowMotion);
+    };
+  }, []);
+
   return (
     <section className="relative overflow-hidden">
-      <div className="bg-grid absolute inset-0 opacity-40" aria-hidden="true" />
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="auto"
+        aria-hidden="true"
+        className="absolute inset-0 h-full w-full object-cover opacity-50"
+      >
+        <source src={`${base}mascota.mp4`} type="video/mp4" />
+      </video>
+      <div
+        className="absolute inset-0 bg-gradient-to-b from-[#07070a]/55 via-[#07070a]/75 to-[#07070a]"
+        aria-hidden="true"
+      />
+      <div
+        className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(7,7,10,0.15)_0%,rgba(7,7,10,0.65)_75%)]"
+        aria-hidden="true"
+      />
+      <div className="bg-grid absolute inset-0 opacity-25" aria-hidden="true" />
       <div
         className="absolute left-1/2 top-[-20rem] h-[36rem] w-[36rem] -translate-x-1/2 rounded-full bg-brand/20 blur-[140px]"
         aria-hidden="true"
