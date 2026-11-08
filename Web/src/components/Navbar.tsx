@@ -50,6 +50,25 @@ export default function Navbar() {
           <span className="hidden sm:inline">GitHub</span>
         </a>
       </nav>
+
+      <div className="flex gap-1 overflow-x-auto px-4 pb-2 md:hidden">
+        {links.map((link) => {
+          const active = link.to === '/' ? pathname === '/' : pathname.startsWith(link.to);
+          return (
+            <Link
+              key={link.to}
+              to={link.to}
+              className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm transition-colors ${
+                active
+                  ? 'bg-white/10 text-white'
+                  : 'text-white/55 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              {link.label}
+            </Link>
+          );
+        })}
+      </div>
     </header>
   );
 }
