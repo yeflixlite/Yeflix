@@ -8,6 +8,7 @@ const links = [
   { label: 'Android', to: '/android' },
   { label: 'Windows', to: '/windows' },
   { label: 'macOS', to: '/macos' },
+  { label: 'Linux', to: '/linux' },
   { label: 'Preguntas', to: '/faq' },
 ];
 

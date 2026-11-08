@@ -8,7 +8,7 @@ export const release = {
   base: 'https://github.com/yeflixlite/Yeflix/releases/download/v1.0.3',
 } as const;
 
-export type AssetIcon = 'phone' | 'tablet' | 'cpu' | 'installer' | 'portable' | 'mac';
+export type AssetIcon = 'phone' | 'tablet' | 'cpu' | 'installer' | 'portable' | 'mac' | 'archive';
 
 export type Asset = {
   id: string;
@@ -87,6 +87,28 @@ export const macosAssets: Asset[] = [
     size: '41.7 MB',
     badge: 'Recomendado',
     icon: 'mac',
+  },
+];
+
+export const linuxAssets: Asset[] = [
+  {
+    id: 'appimage',
+    name: 'AppImage (x86_64)',
+    description:
+      'Un solo archivo que funciona en la mayoría de distribuciones. No requiere instalación: dale permisos y ábrelo.',
+    file: 'Yeflix-1.0.3-Linux-x86_64.AppImage',
+    size: '94 MB',
+    badge: 'Recomendado',
+    icon: 'installer',
+  },
+  {
+    id: 'portable',
+    name: 'Portable (.tar.gz)',
+    description:
+      'Carpeta con el ejecutable y un install.sh que lo agrega al menú de aplicaciones.',
+    file: 'Yeflix-1.0.3-Linux-x64.tar.gz',
+    size: '12.7 MB',
+    icon: 'archive',
   },
 ];
 

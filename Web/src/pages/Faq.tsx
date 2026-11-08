@@ -25,6 +25,10 @@ const faqs = [
     a: 'La app no está firmada con un certificado de Apple, así que macOS la bloquea la primera vez. Ábrela con clic derecho → Abrir, o ve a Ajustes del Sistema → Privacidad y seguridad y pulsa “Abrir igualmente”. Si sigue bloqueada, ejecuta en Terminal: xattr -dr com.apple.quarantine /Applications/Yeflix.app',
   },
   {
+    q: '¿Cómo instalo Yeflix en Linux?',
+    a: 'Descarga el AppImage, dale permisos de ejecución (clic derecho → Propiedades → Permisos) y ábrelo. Si prefieres instalarlo en el menú, usa el .tar.gz y ejecuta ./install.sh. En Ubuntu 23.04 o superior el AppImage puede pedir libfuse2: sudo apt install libfuse2.',
+  },
+  {
     q: '¿La app se actualiza sola?',
     a: `Yeflix comprueba si hay versiones nuevas y te avisa. La versión actual es ${release.version} (build ${release.build}); puedes ver todas las versiones en GitHub Releases.`,
   },
@@ -47,7 +51,7 @@ export default function Faq() {
           Preguntas frecuentes
         </h1>
         <p className="mt-4 text-base text-white/55">
-          Todo lo necesario para instalar Yeflix en Android, Windows o macOS.
+          Todo lo necesario para instalar Yeflix en Android, Windows, macOS o Linux.
         </p>
 
         <div className="mt-10 space-y-3">

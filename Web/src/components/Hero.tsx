@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { ShieldCheck, Smartphone, Monitor, Sparkles, Apple } from 'lucide-react';
+import { ShieldCheck, Smartphone, Monitor, Sparkles, Apple, Terminal } from 'lucide-react';
 import DownloadButtons from './DownloadButtons';
 import { release } from '../data/releases';
 
@@ -10,6 +10,7 @@ const facts = [
   { icon: Smartphone, label: 'Android 5.0 o superior' },
   { icon: Monitor, label: 'Windows 10 / 11 (64-bit)' },
   { icon: Apple, label: 'macOS 10.15 o superior' },
+  { icon: Terminal, label: 'Linux de 64 bits' },
 ];
 
 export default function Hero() {
@@ -88,7 +89,7 @@ export default function Hero() {
 
         <p className="mt-6 max-w-2xl text-base leading-relaxed text-white/60 sm:text-lg">
           Yeflix reúne anime, películas y series en español con un reproductor rápido,
-          descargas offline y soporte de extensiones. Disponible para Android, Windows y macOS.
+          descargas offline y soporte de extensiones. Disponible para Android, Windows, macOS y Linux.
         </p>
 
         <div className="mt-9 w-full max-w-2xl">

@@ -1,4 +1,4 @@
-import { Apple, Monitor, Smartphone } from 'lucide-react';
+import { Apple, Monitor, Smartphone, Terminal } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { release } from '../data/releases';
 
@@ -25,6 +25,13 @@ export default function DownloadButtons() {
       >
         <Apple className="h-5 w-5" />
         Descargar para macOS
+      </Link>
+      <Link
+        to="/linux"
+        className="inline-flex w-full items-center justify-center gap-2.5 rounded-full border border-white/15 bg-white/[0.06] px-6 py-3.5 text-sm font-semibold text-white transition-colors hover:border-white/30 hover:bg-white/10 sm:w-auto"
+      >
+        <Terminal className="h-5 w-5" />
+        Descargar para Linux
       </Link>
       <span className="sr-only">
         Versión {release.version} build {release.build}
