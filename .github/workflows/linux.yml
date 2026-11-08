@@ -16,6 +16,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read version
+        id: meta
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -36,28 +42,13 @@ jobs:
       - name: Build Linux
         run: flutter build linux --release
 
-      - name: Package tarball
-        id: package
-        run: |
-          set -euo pipefail
-          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
-          BUNDLE=build/linux/x64/release/bundle
-          PKG="Yeflix-${VERSION}-Linux-x64"
-          rm -rf "$PKG"
-          mkdir -p "$PKG"
-          cp -r "$BUNDLE"/* "$PKG"/
-          cp assets/icon/logo.png "$PKG/yeflix.png"
-          cp packaging/linux/install.sh "$PKG/install.sh"
-          chmod +x "$PKG/install.sh" "$PKG/yeflix"
-          tar -czf "$PKG.tar.gz" "$PKG"
-          echo "tarball=$PKG.tar.gz" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          ls -lh "$PKG.tar.gz"
-
+      # linuxdeploy empaqueta libmpv y sus dependencias. El AppDir resultante
+      # se reutiliza para el tarball, así el portable tampoco necesita libmpv
+      # instalado en el sistema.
       - name: Build AppImage
         run: |
           set -euo pipefail
-          VERSION="${{ steps.package.outputs.version }}"
+          VERSION="${{ steps.meta.outputs.version }}"
           BUNDLE=build/linux/x64/release/bundle
           APPDIR=AppDir
 
@@ -105,6 +96,34 @@ jobs:
           chmod +x appimagetool.AppImage
           ARCH=x86_64 ./appimagetool.AppImage "$APPDIR" "Yeflix-${VERSION}-Linux-x86_64.AppImage"
           ls -lh Yeflix-*.AppImage
+
+      - name: Package tarball
+        id: package
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          BUNDLE=build/linux/x64/release/bundle
+          PKG="Yeflix-${VERSION}-Linux-x64"
+
+          rm -rf "$PKG"
+          mkdir -p "$PKG"
+          cp -a "$BUNDLE"/. "$PKG"/
+          # libmpv y dependencias ya empaquetadas por linuxdeploy.
+          cp -a AppDir/usr/lib/. "$PKG/lib/"
+
+          mv "$PKG/yeflix" "$PKG/yeflix.bin"
+          cat > "$PKG/yeflix" <<'EOF'
+          #!/bin/sh
+          HERE=$(dirname "$(readlink -f "$0")")
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/yeflix.bin" "$@"
+          EOF
+          chmod +x "$PKG/yeflix" "$PKG/yeflix.bin"
+          cp assets/icon/logo.png "$PKG/yeflix.png"
+
+          tar -czf "$PKG.tar.gz" "$PKG"
+          echo "tarball=$PKG.tar.gz" >> "$GITHUB_OUTPUT"
+          ls -lh "$PKG.tar.gz"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
