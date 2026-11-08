@@ -26,7 +26,7 @@ const faqs = [
   },
   {
     q: '¿Cómo instalo Yeflix en Linux?',
-    a: 'Descarga el AppImage, dale permisos de ejecución (clic derecho → Propiedades → Permisos) y ábrelo. Si prefieres instalarlo en el menú, usa el .tar.gz y ejecuta ./install.sh. En Ubuntu 23.04 o superior el AppImage puede pedir libfuse2: sudo apt install libfuse2.',
+    a: 'Lo más rápido es pegar el comando de instalación de la página de Linux en la terminal: descarga la app, la instala en ~/.local/opt/yeflix y la agrega al menú, sin instalar librerías aparte. También puedes usar el AppImage (dale permisos de ejecución y ábrelo) o el portable .tar.gz (extrae y ejecuta ./yeflix). En Ubuntu 23.04 o superior el AppImage puede pedir libfuse2: sudo apt install libfuse2.',
   },
   {
     q: '¿La app se actualiza sola?',

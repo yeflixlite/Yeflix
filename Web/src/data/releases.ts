@@ -105,9 +105,9 @@ export const linuxAssets: Asset[] = [
     id: 'portable',
     name: 'Portable (.tar.gz)',
     description:
-      'Carpeta con el ejecutable y un install.sh que lo agrega al menú de aplicaciones.',
+      'Carpeta lista para usar: extrae, abre «yeflix» y listo. Incluye el reproductor y sus librerías.',
     file: 'Yeflix-1.0.3-Linux-x64.tar.gz',
-    size: '12.7 MB',
+    size: '100 MB',
     icon: 'archive',
   },
 ];
