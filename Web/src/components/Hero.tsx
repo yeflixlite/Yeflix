@@ -42,7 +42,7 @@ export default function Hero() {
         playsInline
         preload="auto"
         aria-hidden="true"
-        className="absolute inset-0 h-full w-full object-cover opacity-50"
+        className="absolute inset-0 h-full w-full object-cover opacity-65"
       >
         <source src={`${base}mascota.mp4`} type="video/mp4" />
       </video>
@@ -54,7 +54,6 @@ export default function Hero() {
         className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(7,7,10,0.15)_0%,rgba(7,7,10,0.65)_75%)]"
         aria-hidden="true"
       />
-      <div className="bg-grid absolute inset-0 opacity-25" aria-hidden="true" />
       <div
         className="absolute left-1/2 top-[-20rem] h-[36rem] w-[36rem] -translate-x-1/2 rounded-full bg-brand/20 blur-[140px]"
         aria-hidden="true"
