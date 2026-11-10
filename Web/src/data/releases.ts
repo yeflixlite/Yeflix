@@ -1,11 +1,11 @@
 export const release = {
   version: '1.0.3',
   build: 12,
-  tag: 'v1.0.3',
+  tag: 'v1.0.3-build-1',
   repo: 'https://github.com/yeflixlite/Yeflix',
   releases: 'https://github.com/yeflixlite/Yeflix/releases',
   extensions: 'https://raw.githubusercontent.com/yeflixlite/Anime/main',
-  base: 'https://github.com/yeflixlite/Yeflix/releases/download/v1.0.3',
+  base: 'https://github.com/yeflixlite/Yeflix/releases/download/v1.0.3-build-1',
 } as const;
 
 export type AssetIcon = 'phone' | 'tablet' | 'cpu' | 'installer' | 'portable' | 'mac' | 'archive';
