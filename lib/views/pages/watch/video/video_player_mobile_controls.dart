@@ -34,10 +34,6 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
   bool _isBrightness = false;
   // 是否正在调节
   bool _isAdjusting = false;
-  // 滑动时的进度
-  Duration _position = Duration.zero;
-  // 是否左右滑动调整进度
-  bool _isSeeking = false;
   // 是否长按加速
   bool _isLongPress = false;
   // 定时器
@@ -87,9 +83,8 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                 entry.key == _c.currentServerName.value
                     ? Icons.check_circle
                     : Icons.dns_outlined,
-                color: entry.key == _c.currentServerName.value
-                    ? Colors.red
-                    : null,
+                color:
+                    entry.key == _c.currentServerName.value ? Colors.red : null,
               ),
               title: Text(entry.key),
               subtitle: Text(
@@ -171,22 +166,6 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (_isSeeking)
-                        Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '${_position.inMinutes}:${(_position.inSeconds % 60).toString().padLeft(2, '0')}',
-                              ),
-                              const Text('/'),
-                              Text(
-                                '${_c.duration.value.inMinutes}:${(_c.duration.value.inSeconds % 60).toString().padLeft(2, '0')}',
-                              ),
-                            ],
-                          ),
-                        ),
                       if (_isLongPress)
                         const Padding(
                           padding: EdgeInsets.all(8.0),
@@ -279,32 +258,8 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                   _isAdjusting = true;
                   setState(() {});
                 },
-                onHorizontalDragStart: (details) {
-                  _position = _c.position.value;
-                },
                 onVerticalDragEnd: (details) {
                   _isAdjusting = false;
-                  setState(() {});
-                },
-                // 左右滑动
-                onHorizontalDragUpdate: (details) {
-                  double scale = 200000 / LayoutUtils.width;
-                  Duration pos = _position +
-                      Duration(
-                        milliseconds: (details.delta.dx * scale).round(),
-                      );
-                  _position = Duration(
-                    milliseconds: pos.inMilliseconds.clamp(
-                      0,
-                      _c.duration.value.inMilliseconds,
-                    ),
-                  );
-                  _isSeeking = true;
-                  setState(() {});
-                },
-                onHorizontalDragEnd: (details) {
-                  _c.seek(_position);
-                  _isSeeking = false;
                   setState(() {});
                 },
                 onLongPressStart: (details) {
@@ -375,7 +330,8 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                       ],
                     );
                   }
-                  if (_c.serverFailedMessage.value.isNotEmpty && !isPlayingVideo) {
+                  if (_c.serverFailedMessage.value.isNotEmpty &&
+                      !isPlayingVideo) {
                     return Container(
                       margin: const EdgeInsets.symmetric(horizontal: 24),
                       padding: const EdgeInsets.all(16),
@@ -433,8 +389,7 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                             context,
                             'video.cast-device',
                             translationParams: {
-                              'device':
-                                  _c.dlnaDevice.value!.info.friendlyName,
+                              'device': _c.dlnaDevice.value!.info.friendlyName,
                             },
                           ),
                           style: const TextStyle(
@@ -531,6 +486,16 @@ class _Header extends StatelessWidget {
             onPressed: () {
               RouterUtils.pop();
             },
+          ),
+          const SizedBox(width: 4),
+          const Text(
+            'YEFLIX',
+            style: TextStyle(
+              color: Color(0xFFE50914),
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+              letterSpacing: 1.5,
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -690,171 +655,203 @@ class _Footer extends StatelessWidget {
         children: [
           _SeekBar(controller: controller),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Obx(
-                () => IconButton(
-                  icon: const Icon(Icons.skip_previous),
-                  onPressed: controller.index.value > 0
-                      ? () {
-                          controller.index.value--;
-                        }
-                      : null,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // En pantallas estrechas (tablets en vertical o teléfonos
+              // pequeños) la fila fija desbordaba. En modo compacto los
+              // controles fluyen a una segunda línea en vez de recortarse.
+              final compact = constraints.maxWidth < 720;
+              final controls = <Widget>[
+                Obx(
+                  () => IconButton(
+                    icon: const Icon(Icons.skip_previous),
+                    onPressed: controller.index.value > 0
+                        ? () {
+                            controller.index.value--;
+                          }
+                        : null,
+                  ),
                 ),
-              ),
-              Obx(() {
-                if (controller.isPlaying.value) {
+                IconButton(
+                  tooltip: 'Retroceder 10s',
+                  icon: const Icon(Icons.replay_10, size: 28),
+                  onPressed: () {
+                    controller.seek(
+                      controller.position.value - const Duration(seconds: 10),
+                    );
+                  },
+                ),
+                Obx(() {
+                  if (controller.isPlaying.value) {
+                    return IconButton(
+                      onPressed: controller.playOrPause,
+                      icon: const Icon(
+                        Icons.pause,
+                        size: 32,
+                      ),
+                    );
+                  }
                   return IconButton(
                     onPressed: controller.playOrPause,
                     icon: const Icon(
-                      Icons.pause,
-                      size: 30,
+                      Icons.play_arrow,
+                      size: 32,
                     ),
                   );
-                }
-                return IconButton(
-                  onPressed: controller.playOrPause,
-                  icon: const Icon(
-                    Icons.play_arrow,
-                    size: 30,
-                  ),
-                );
-              }),
-              Obx(
-                () => IconButton(
-                  icon: const Icon(Icons.skip_next),
-                  onPressed:
-                      controller.playList.length - 1 > controller.index.value
-                          ? () {
-                              controller.index.value++;
-                            }
-                          : null,
-                ),
-              ),
-              const SizedBox(width: 10),
-              // 播放进度
-              Obx(() {
-                final position = controller.position.value;
-                return Text(
-                  '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w300,
-                  ),
-                );
-              }),
-              const Text('/'),
-              Obx(() {
-                final duration = controller.duration.value;
-                return Text(
-                  '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w300,
-                  ),
-                );
-              }),
-              const Spacer(),
-              Obx(() {
-                if (controller.currentQuality.value.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                return FilledButton.tonal(
+                }),
+                IconButton(
+                  tooltip: 'Adelantar 10s',
+                  icon: const Icon(Icons.forward_10, size: 28),
                   onPressed: () {
-                    if (controller.qualityMap.isEmpty) {
-                      controller.sendMessage(
-                        Message(
-                          Text(
-                            'video.no-qualities'.i18n,
-                          ),
-                        ),
-                      );
-                      return;
-                    }
-                    controller.toggleSideBar(SidebarTab.qualitys);
+                    controller.seek(
+                      controller.position.value + const Duration(seconds: 10),
+                    );
                   },
-                  style: ButtonStyle(
-                    padding: MaterialStateProperty.all(
-                      const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
+                ),
+                Obx(
+                  () => IconButton(
+                    icon: const Icon(Icons.skip_next),
+                    onPressed:
+                        controller.playList.length - 1 > controller.index.value
+                            ? () {
+                                controller.index.value++;
+                              }
+                            : null,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // 播放进度
+                Obx(() {
+                  final position = controller.position.value;
+                  return Text(
+                    '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w300,
+                    ),
+                  );
+                }),
+                const Text('/'),
+                Obx(() {
+                  final duration = controller.duration.value;
+                  return Text(
+                    '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w300,
+                    ),
+                  );
+                }),
+                compact ? const SizedBox(width: 16) : const Spacer(),
+                Obx(() {
+                  if (controller.currentQuality.value.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return FilledButton.tonal(
+                    onPressed: () {
+                      if (controller.qualityMap.isEmpty) {
+                        controller.sendMessage(
+                          Message(
+                            Text(
+                              'video.no-qualities'.i18n,
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      controller.toggleSideBar(SidebarTab.qualitys);
+                    },
+                    style: ButtonStyle(
+                      padding: MaterialStateProperty.all(
+                        const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                      ),
+                    ),
+                    child: Text(
+                      controller.currentQuality.value,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w300,
+                      ),
+                    ),
+                  );
+                }),
+                const SizedBox(width: 10),
+                // 倍速
+                Obx(
+                  () => PopupMenuButton<double>(
+                    initialValue: controller.currentSpeed.value,
+                    onSelected: (value) {
+                      controller.currentSpeed.value = value;
+                    },
+                    itemBuilder: (context) {
+                      return [
+                        for (final speed in controller.speedList)
+                          PopupMenuItem(
+                            value: speed,
+                            child: Text('${speed}x'),
+                          ),
+                      ];
+                    },
+                    child: Text(
+                      '${controller.currentSpeed.value}x',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w300,
                       ),
                     ),
                   ),
-                  child: Text(
-                    controller.currentQuality.value,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w300,
-                    ),
-                  ),
-                );
-              }),
-              const SizedBox(width: 10),
-              // 倍速
-              Obx(
-                () => PopupMenuButton<double>(
-                  initialValue: controller.currentSpeed.value,
-                  onSelected: (value) {
-                    controller.currentSpeed.value = value;
-                  },
-                  itemBuilder: (context) {
-                    return [
-                      for (final speed in controller.speedList)
-                        PopupMenuItem(
-                          value: speed,
-                          child: Text('${speed}x'),
-                        ),
-                    ];
-                  },
-                  child: Text(
-                    '${controller.currentSpeed.value}x',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w300,
-                    ),
-                  ),
                 ),
-              ),
-              // torrent files
-              const SizedBox(width: 10),
-              Obx(() {
-                if (controller.torrentMediaFileList.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                return IconButton(
+                // torrent files
+                const SizedBox(width: 10),
+                Obx(() {
+                  if (controller.torrentMediaFileList.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return IconButton(
+                    onPressed: () {
+                      controller.toggleSideBar(SidebarTab.torrentFiles);
+                    },
+                    icon: const Icon(Icons.video_file),
+                  );
+                }),
+                Obx(() {
+                  if (controller.availableServers.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return IconButton(
+                    tooltip: 'Servidores',
+                    onPressed: () => _showServers(context),
+                    icon: const Icon(Icons.dns_rounded),
+                  );
+                }),
+                IconButton(
                   onPressed: () {
-                    controller.toggleSideBar(SidebarTab.torrentFiles);
+                    controller.toggleSideBar(SidebarTab.tracks);
                   },
-                  icon: const Icon(Icons.video_file),
-                );
-              }),
-              Obx(() {
-                if (controller.availableServers.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                return IconButton(
-                  tooltip: 'Servidores',
-                  onPressed: () => _showServers(context),
-                  icon: const Icon(Icons.dns_rounded),
-                );
-              }),
-              IconButton(
-                onPressed: () {
-                  controller.toggleSideBar(SidebarTab.tracks);
-                },
-                icon: const Icon(
-                  Icons.subtitles,
+                  icon: const Icon(
+                    Icons.subtitles,
+                  ),
                 ),
-              ),
-              // 播放列表
-              IconButton(
-                icon: const Icon(Icons.playlist_play),
-                onPressed: () {
-                  controller.toggleSideBar(SidebarTab.episodes);
-                },
-              ),
-            ],
+                // 播放列表
+                IconButton(
+                  icon: const Icon(Icons.playlist_play),
+                  onPressed: () {
+                    controller.toggleSideBar(SidebarTab.episodes);
+                  },
+                ),
+              ];
+              if (compact) {
+                return Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: controls,
+                );
+              }
+              return Row(children: controls);
+            },
           ),
         ],
       ),
@@ -904,13 +901,18 @@ class _SeekBarState extends State<_SeekBar> {
       height: 13,
       child: SliderTheme(
         data: const SliderThemeData(
-          trackHeight: 2,
+          trackHeight: 2.5,
           thumbShape: RoundSliderThumbShape(
             enabledThumbRadius: 6,
           ),
           overlayShape: RoundSliderOverlayShape(
             overlayRadius: 12,
           ),
+          activeTrackColor: Color(0xFFE50914),
+          thumbColor: Color(0xFFE50914),
+          overlayColor: Color(0x33E50914),
+          inactiveTrackColor: Colors.white24,
+          secondaryActiveTrackColor: Colors.white38,
         ),
         child: Obx(
           () {

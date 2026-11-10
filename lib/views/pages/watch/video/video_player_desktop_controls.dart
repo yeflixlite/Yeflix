@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:fluent_ui/fluent_ui.dart';
+import 'package:flutter/material.dart' as m show Icon, Icons;
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
@@ -154,7 +155,6 @@ class _VideoPlayerDesktopControlsState
                                         ),
                                         title:
                                             Text('common.error-message'.i18n),
-
                                         content: SelectableText(_c.error.value),
                                         actions: [
                                           Button(
@@ -239,13 +239,13 @@ class _VideoPlayerDesktopControlsState
                                 ),
                                 const SizedBox(width: 16),
                                 Text(
-                                    msg,
-                                    style: const TextStyle(
-                                      fontSize: 15,
-                                      color: Colors.white,
-                                      height: 1.5,
-                                    ),
+                                  msg,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    color: Colors.white,
+                                    height: 1.5,
                                   ),
+                                ),
                                 const SizedBox(width: 16),
                                 IconButton(
                                   icon: const Icon(
@@ -275,7 +275,6 @@ class _VideoPlayerDesktopControlsState
                   ],
                 ),
               ),
-
             ],
           ),
         ),
@@ -325,6 +324,16 @@ class _HeaderState extends State<_Header> {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         child: Row(
           children: [
+            const Text(
+              'YEFLIX',
+              style: TextStyle(
+                color: Color(0xFFE50914),
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+                letterSpacing: 1.5,
+              ),
+            ),
+            const SizedBox(width: 14),
             Expanded(
               child: DragToMoveArea(
                 child: Column(
@@ -438,164 +447,217 @@ class _Footer extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             LayoutBuilder(builder: (context, constraints) {
-              return Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (constraints.maxWidth > 500)
-                    Expanded(
-                      flex: 1,
-                      child: // 音量
-                          Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _Volume(
-                            value: controller.player.state.volume,
-                            onVolumeChanged: (value) {
-                              controller.player.setVolume(value);
-                            },
-                          ),
-                          // 画质
-                          Obx(() {
-                            if (controller.currentQuality.value.isEmpty) {
-                              return const SizedBox.shrink();
-                            }
-                            return Padding(
-                              padding: const EdgeInsets.only(left: 10),
-                              child: _Quality(controller: controller),
-                            );
-                          }),
-                        ],
-                      ),
-                    ),
-                  Expanded(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // 上一集
-                        Obx(
-                          () => IconButton(
-                            onPressed: controller.index.value > 0
-                                ? () {
-                                    controller.index.value--;
-                                  }
-                                : null,
-                            icon: const Icon(
-                              FluentIcons.previous,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 20),
-                        StreamBuilder(
-                          stream: controller.player.stream.playing,
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData && snapshot.data! ||
-                                controller.player.state.playing) {
-                              return IconButton(
-                                onPressed: controller.player.pause,
-                                icon: const Icon(
-                                  FluentIcons.pause,
-                                  size: 30,
-                                ),
-                              );
-                            }
-                            return IconButton(
-                              onPressed: controller.player.play,
-                              icon: const Icon(
-                                FluentIcons.play,
-                                size: 30,
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(width: 20),
-                        // 下一集
-                        Obx(
-                          () => IconButton(
-                            onPressed: controller.playList.length - 1 >
-                                    controller.index.value
-                                ? () {
-                                    controller.index.value++;
-                                  }
-                                : null,
-                            icon: const Icon(
-                              FluentIcons.next,
-                            ),
-                          ),
-                        ),
-                      ],
+              // El layout de tres columnas necesita ~1200 px de contenido:
+              // por debajo, los controles se apilan en dos filas para no
+              // desbordar (p. ej. ventanas de 1024 px o snap a media pantalla).
+              final wide = constraints.maxWidth >= 1200;
+
+              final leftControls = <Widget>[
+                _Volume(
+                  value: controller.player.state.volume,
+                  onVolumeChanged: (value) {
+                    controller.player.setVolume(value);
+                  },
+                ),
+                // 画质
+                Obx(() {
+                  if (controller.currentQuality.value.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(left: 10),
+                    child: _Quality(controller: controller),
+                  );
+                }),
+              ];
+
+              final transportControls = <Widget>[
+                // 上一集
+                Obx(
+                  () => IconButton(
+                    onPressed: controller.index.value > 0
+                        ? () {
+                            controller.index.value--;
+                          }
+                        : null,
+                    icon: const Icon(
+                      FluentIcons.previous,
                     ),
                   ),
-                  if (constraints.maxWidth > 500)
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  onPressed: () {
+                    controller.seek(
+                      controller.position.value - const Duration(seconds: 10),
+                    );
+                  },
+                  icon: const m.Icon(
+                    m.Icons.replay_10,
+                    size: 26,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                StreamBuilder(
+                  stream: controller.player.stream.playing,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasData && snapshot.data! ||
+                        controller.player.state.playing) {
+                      return IconButton(
+                        onPressed: controller.player.pause,
+                        icon: const Icon(
+                          FluentIcons.pause,
+                          size: 30,
+                        ),
+                      );
+                    }
+                    return IconButton(
+                      onPressed: controller.player.play,
+                      icon: const Icon(
+                        FluentIcons.play,
+                        size: 30,
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  onPressed: () {
+                    controller.seek(
+                      controller.position.value + const Duration(seconds: 10),
+                    );
+                  },
+                  icon: const m.Icon(
+                    m.Icons.forward_10,
+                    size: 26,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // 下一集
+                Obx(
+                  () => IconButton(
+                    onPressed:
+                        controller.playList.length - 1 > controller.index.value
+                            ? () {
+                                controller.index.value++;
+                              }
+                            : null,
+                    icon: const Icon(
+                      FluentIcons.next,
+                    ),
+                  ),
+                ),
+              ];
+
+              final rightControls = <Widget>[
+                // playback speed
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: _Speed(controller: controller),
+                ),
+                // torrent files
+                Obx(() {
+                  if (controller.torrentMediaFileList.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: _TorrentFiles(
+                      controller: controller,
+                    ),
+                  );
+                }),
+                // track
+                _Track(controller: controller),
+                const SizedBox(width: 10),
+
+                // selector de servidor
+                Obx(() {
+                  if (controller.availableServers.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: _ServerSelector(controller: controller),
+                  );
+                }),
+
+                // 剧集
+                _Episode(controller: controller),
+
+                const SizedBox(width: 10),
+                // 全屏
+                Obx(
+                  () => IconButton(
+                    onPressed: () {
+                      controller.toggleFullscreen();
+                    },
+                    icon: Icon(
+                      controller.isFullScreen.value
+                          ? FluentIcons.back_to_window
+                          : FluentIcons.full_screen,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // 设置
+                IconButton(
+                  onPressed: () {
+                    final showPlayList = controller.showSidebar.value;
+                    controller.showSidebar.value = !showPlayList;
+                  },
+                  icon: const Icon(
+                    FluentIcons.settings,
+                  ),
+                ),
+              ];
+
+              if (wide) {
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: leftControls,
+                      ),
+                    ),
+                    Expanded(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: transportControls,
+                      ),
+                    ),
                     Expanded(
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // playback speed
-                          if (constraints.maxWidth > 700)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 10),
-                              child: _Speed(controller: controller),
-                            ),
-                          // torrent files
-                          if (constraints.maxWidth > 700)
-                            Obx(() {
-                              if (controller.torrentMediaFileList.isEmpty) {
-                                return const SizedBox.shrink();
-                              }
-                              return Padding(
-                                padding: const EdgeInsets.only(right: 10),
-                                child: _TorrentFiles(
-                                  controller: controller,
-                                ),
-                              );
-                            }),
-                          // track
-                          _Track(controller: controller),
-                          const SizedBox(width: 10),
-
-                          // selector de servidor
-                          Obx(() {
-                            if (controller.availableServers.isEmpty) {
-                              return const SizedBox.shrink();
-                            }
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 10),
-                              child: _ServerSelector(controller: controller),
-                            );
-                          }),
-
-                          // 剧集
-                          _Episode(controller: controller),
-
-                          const SizedBox(width: 10),
-                          // 全屏
-                          Obx(
-                            () => IconButton(
-                              onPressed: () {
-                                controller.toggleFullscreen();
-                              },
-                              icon: Icon(
-                                controller.isFullScreen.value
-                                    ? FluentIcons.back_to_window
-                                    : FluentIcons.full_screen,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          // 设置
-                          IconButton(
-                            onPressed: () {
-                              final showPlayList = controller.showSidebar.value;
-                              controller.showSidebar.value = !showPlayList;
-                            },
-                            icon: const Icon(
-                              FluentIcons.settings,
-                            ),
-                          ),
-                        ],
+                        children: rightControls,
                       ),
                     ),
+                  ],
+                );
+              }
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: transportControls,
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      ...leftControls,
+                      ...rightControls,
+                    ],
+                  ),
                 ],
               );
             })
@@ -1197,25 +1259,36 @@ class _SeekBarState extends State<_SeekBar> {
     final maxValue = maxSeconds > 0 ? maxSeconds.toDouble() : 1.0;
     final currentValue =
         position.inSeconds.toDouble().clamp(0.0, maxValue).toDouble();
-    return Slider(
-      value: currentValue,
-      max: maxValue,
-      label:
-          '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}',
-      onChanged: (value) {
-        _isDrag = true;
-        setState(() {
-          position = Duration(seconds: value.toInt());
-        });
-      },
-      onChangeEnd: (value) {
-        _isDrag = false;
-        widget.controller.player.seek(
-          Duration(
-            seconds: value.toInt(),
-          ),
-        );
-      },
+    return FluentTheme(
+      data: FluentTheme.of(context).copyWith(
+        // En tema oscuro Fluent usa `accentColor.lighter` para el track
+        // activo, lo que daba #EC525A. Aquí se fija el rojo exacto.
+        sliderTheme: SliderThemeData(
+          activeColor: ButtonState.all<Color?>(const Color(0xFFE50914)),
+          thumbColor: ButtonState.all<Color?>(const Color(0xFFE50914)),
+          inactiveColor: ButtonState.all<Color?>(const Color(0x3DFFFFFF)),
+        ),
+      ),
+      child: Slider(
+        value: currentValue,
+        max: maxValue,
+        label:
+            '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')}',
+        onChanged: (value) {
+          _isDrag = true;
+          setState(() {
+            position = Duration(seconds: value.toInt());
+          });
+        },
+        onChangeEnd: (value) {
+          _isDrag = false;
+          widget.controller.player.seek(
+            Duration(
+              seconds: value.toInt(),
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -1253,9 +1326,14 @@ class _ServerSelectorState extends State<_ServerSelector> {
               children: [
                 const Icon(FluentIcons.server, size: 14),
                 const SizedBox(width: 6),
-                Text(
-                  current.isEmpty ? 'Servidor' : current,
-                  style: const TextStyle(fontSize: 13),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 90),
+                  child: Text(
+                    current.isEmpty ? 'Servidor' : current,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13),
+                  ),
                 ),
               ],
             ),
@@ -1297,10 +1375,9 @@ class _ServerSelectorState extends State<_ServerSelector> {
                                   for (final entry in widget
                                       .controller.availableServers.entries)
                                     Obx(() {
-                                      final isCurrent =
-                                          widget.controller.currentServerName
-                                                  .value ==
-                                              entry.key;
+                                      final isCurrent = widget.controller
+                                              .currentServerName.value ==
+                                          entry.key;
                                       return ListTile.selectable(
                                         selected: isCurrent,
                                         leading: Icon(
