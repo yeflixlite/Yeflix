@@ -57,12 +57,25 @@ class _VideoPlayerSidebarState extends State<VideoPlayerSidebar> {
             : _tabs.keys.toList().indexOf(_c.initSidebarTab.value),
         child: Column(
           children: [
-            TabBar(
-              tabAlignment: TabAlignment.center,
-              isScrollable: true,
-              tabs: _tabs.keys
-                  .map((e) => Tab(text: _sidebarTabToString(e)))
-                  .toList(),
+            Row(
+              children: [
+                Expanded(
+                  child: TabBar(
+                    tabAlignment: TabAlignment.center,
+                    isScrollable: true,
+                    tabs: _tabs.keys
+                        .map((e) => Tab(text: _sidebarTabToString(e)))
+                        .toList(),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'common.close'.i18n,
+                  icon: const Icon(Icons.close),
+                  onPressed: () {
+                    _c.showSidebar.value = false;
+                  },
+                ),
+              ],
             ),
             Expanded(
               child: TabBarView(
