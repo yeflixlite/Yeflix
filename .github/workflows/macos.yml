@@ -55,6 +55,6 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             TAG="${GITHUB_REF_NAME}"
           else
-            TAG="v1.0.3"
+            TAG="v1.0"
           fi
           gh release upload "$TAG" "${{ steps.package.outputs.zip }}" --clobber
