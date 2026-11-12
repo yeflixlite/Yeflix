@@ -11,7 +11,8 @@
 set -eu
 
 REPO="yeflixlite/Yeflix"
-FALLBACK_TAG="v1.0.3"
+FALLBACK_TAG="v1.0"
+FALLBACK_ASSET="Yeflix-1.0.0-Linux-x64.tar.gz"
 DEST="$HOME/.local/opt/yeflix"
 BIN_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
@@ -38,18 +39,32 @@ else
 fi
 
 # --- Version ---------------------------------------------------------------
+#
+# El tag del release (v1.0) no coincide con la version del archivo
+# (1.0.0), asi que el nombre del asset se toma del propio release y solo se
+# usa el valor de reserva si la API no responde.
 
-TAG=""
+API="https://api.github.com/repos/$REPO/releases/latest"
+RELEASE_JSON=""
 if command -v curl >/dev/null 2>&1; then
-  TAG=$(curl -fsSL --proto '=https' --tlsv1.2 \
-    "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -n 1 || true)
+  RELEASE_JSON=$(curl -fsSL --proto '=https' --tlsv1.2 "$API" 2>/dev/null || true)
+elif command -v wget >/dev/null 2>&1; then
+  RELEASE_JSON=$(wget -q -O - "$API" 2>/dev/null || true)
 fi
-[ -n "$TAG" ] || TAG="$FALLBACK_TAG"
-VERSION=${TAG#v}
 
-ASSET="Yeflix-${VERSION}-Linux-x64.tar.gz"
+TAG=$(printf '%s' "$RELEASE_JSON" \
+  | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+  | head -n 1)
+[ -n "$TAG" ] || TAG="$FALLBACK_TAG"
+
+ASSET=$(printf '%s' "$RELEASE_JSON" \
+  | grep -o '[A-Za-z0-9._-]*Linux-x64\.tar\.gz' \
+  | head -n 1 || true)
+[ -n "$ASSET" ] || ASSET="$FALLBACK_ASSET"
+
+VERSION=$(printf '%s' "$ASSET" | sed -n 's/^Yeflix-\(.*\)-Linux-x64\.tar\.gz$/\1/p')
+[ -n "$VERSION" ] || VERSION=${TAG#v}
+
 URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
 
 # --- Descarga y extraccion -------------------------------------------------

@@ -45,7 +45,9 @@
     "trending": "Tendencias",
     "empty-title": "Empieza tu colección",
     "empty-subtitle": "Añade fuentes en Extensiones para encontrar y ver anime, películas y series.",
-    "explore": "Explorar extensiones"
+    "explore": "Explorar extensiones",
+    "error-title": "No se pudo cargar el catálogo",
+    "error-subtitle": "Las fuentes no respondieron. Revisa tu conexión y vuelve a intentarlo."
   },
   "search": {
     "hint-text": "¡Por favor, busca ampliamente!~",

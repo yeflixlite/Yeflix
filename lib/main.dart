@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:jiruhub/controllers/application_controller.dart';
+import 'package:jiruhub/models/extension.dart';
 import 'package:jiruhub/utils/log.dart';
 import 'package:jiruhub/utils/jiruhub_directory.dart';
 import 'package:jiruhub/utils/request.dart';
@@ -16,6 +17,7 @@ import 'package:jiruhub/views/pages/main_page.dart';
 import 'package:jiruhub/views/pages/splash_page.dart';
 import 'package:jiruhub/router/router.dart';
 import 'package:jiruhub/utils/extension.dart';
+import 'package:jiruhub/utils/javascriptcore_linux.dart';
 import 'package:jiruhub/services/extension/extension_update_service.dart';
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/jiruhub_storage.dart';
@@ -25,6 +27,60 @@ import 'package:jiruhub/views/widgets/platform_widget.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:jiruhub/data/services/download_service.dart';
+
+/// Devuelve la ruta del libmpv empaquetado junto al ejecutable, si existe.
+/// Evita que media_kit cargue el libmpv del sistema además del incluido
+/// (dos copias hacen abortar mpv_render_context_create).
+String? _bundledLibmpv() {
+  if (!Platform.isLinux) return null;
+  final exeDir = File(Platform.resolvedExecutable).parent.path;
+  final candidates = <String>[
+    '$exeDir/lib/libmpv.so.2',
+    '$exeDir/lib/libmpv.so',
+    '$exeDir/libmpv.so.2',
+    '$exeDir/libmpv.so',
+    '$exeDir/../lib/libmpv.so.2',
+  ];
+  for (final candidate in candidates) {
+    if (File(candidate).existsSync()) return candidate;
+  }
+  return null;
+}
+
+/// Comprueba en consola qué extensiones se cargaron y qué devuelve `latest(1)`.
+/// No escribe nada en el catálogo ni modifica ajustes.
+Future<void> _runCatalogDiagnostics() async {
+  stdout.writeln('== YEFLIX DIAG ==');
+  stdout.writeln(
+    'extensiones cargadas: ${ExtensionUtils.runtimes.keys.join(', ')}',
+  );
+  for (final entry in ExtensionUtils.extensionErrorMap.entries) {
+    stdout.writeln('error de carga ${entry.key}: ${entry.value}');
+  }
+  for (final rt in ExtensionUtils.runtimes.values) {
+    if (rt.extension.type != ExtensionType.bangumi) continue;
+    final pkg = rt.extension.package;
+    final sw = Stopwatch()..start();
+    try {
+      final list = await rt.latest(1).timeout(const Duration(seconds: 45));
+      stdout.writeln(
+        'LATEST $pkg (${rt.extension.name}): ${list.length} elementos '
+        'en ${sw.elapsedMilliseconds} ms',
+      );
+      for (final item in list.take(5)) {
+        stdout.writeln(
+          '  - ${item.title} | ${item.url} | cover=${item.cover ?? ""}',
+        );
+      }
+    } catch (e, s) {
+      stdout.writeln(
+        'LATEST $pkg FALLO en ${sw.elapsedMilliseconds} ms: $e',
+      );
+      stdout.writeln(s);
+    }
+  }
+  await stdout.flush();
+}
 
 void main(List<String> args) async {
   if (args.contains('-version') || args.contains('--version')) {
@@ -40,6 +96,11 @@ void main(List<String> args) async {
     };
 
     WidgetsFlutterBinding.ensureInitialized();
+
+    // Linux: flutter_js pide "libjavascriptcoregtk-4.0.so.18", que ya no
+    // existe en Mint 22 / Ubuntu 24.04. Se elige la versión disponible antes
+    // de que ninguna extensión cree su runtime.
+    JavascriptCoreLoader.ensureInitialized();
 
     // 多窗口
     if (args.firstOrNull == 'multi_window') {
@@ -64,9 +125,18 @@ void main(List<String> args) async {
     await ApplicationUtils.ensureInitialized();
     await MiruRequest.ensureInitialized();
     await ExtensionUtils.ensureInitialized();
+
+    // Modo diagnóstico (solo lectura): permite comprobar desde una terminal
+    // qué extensiones se cargaron y qué devuelve latest(1) sin abrir la GUI.
+    //   YEFLIX_DIAG=1 ./yeflix
+    if (Platform.environment['YEFLIX_DIAG'] == '1') {
+      await _runCatalogDiagnostics();
+      exit(0);
+    }
+
     // Actualizador de extensiones independiente del actualizador de la app.
     ExtensionUpdateService.instance.start();
-    MediaKit.ensureInitialized();
+    MediaKit.ensureInitialized(libmpv: _bundledLibmpv());
     Get.put(DownloadService(), permanent: true);
 
     if (!Platform.isAndroid) {

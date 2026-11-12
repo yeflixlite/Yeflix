@@ -105,7 +105,8 @@ class _HomePageState extends State<HomePage> {
               if (!hasFav &&
                   c.animes.isEmpty &&
                   c.movies.isEmpty &&
-                  c.series.isEmpty)
+                  c.series.isEmpty &&
+                  c.catalogError.value.isEmpty)
                 _emptyState(),
             ],
           ),

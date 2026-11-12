@@ -1,6 +1,6 @@
 // ==MiruExtension==
 // @name         Pelis Premium
-// @version      v0.1.8
+// @version      v0.1.9
 // @author       YeaniFlix
 // @lang         es
 // @license      MIT
@@ -134,13 +134,13 @@ export default class extends Extension {
     const info = this.info(html);
     const vid = this.vidUrl(html, url);
 
-    if (/\/serie\//i.test(url) && !/\/capitulo\//i.test(url)) {
-      const eps = this.episodes(html, url);
+    if (url.includes("/serie/") && !url.includes("/capitulo/")) {
+      const groups = this.seriesEpisodeGroups(html, url);
       return {
         title: info.title,
         cover: info.cover,
         desc: info.description,
-        episodes: [{ title: "Episodios", urls: eps }],
+        episodes: groups.length ? groups : [{ title: "Episodios", urls: [] }],
       };
     }
 
@@ -205,27 +205,100 @@ export default class extends Extension {
     return this.siteUrl(m[1]);
   }
 
-  episodes(html, base) {
-    const out = [];
+  seriesEpisodeGroups(html, base) {
+    const cleanBase = this.siteUrl(base).split("#")[0].replace(/\/+$/, "");
+    const slugMatch = cleanBase.match(/\/serie\/([^/]+)/i);
+    const slug = slugMatch ? slugMatch[1] : "";
+
+    const seasonsMap = {};
     const seen = {};
-    const re = /href=["']([^"']*\/serie\/[^"'\/]+\/temporada\/(\d+)\/capitulo\/(\d+)[^"']*)["']/gi;
+
+    // 1. Método moderno: data-season + data-episode (PelisPedia actual)
+    const reModern = /<a\s+[^>]*href=["'](?:#s\d+-e\d+|[^"']*)["'][^>]*data-season=["'](\d+)["'][^>]*data-episode=["'](\d+)["'][^>]*>([\s\S]*?)<\/a>/gi;
     let m;
-    while ((m = re.exec(String(html || ""))) !== null) {
-      const s = parseInt(m[2], 10);
-      const e = parseInt(m[3], 10);
+    while ((m = reModern.exec(String(html || ""))) !== null) {
+      const s = parseInt(m[1], 10);
+      const e = parseInt(m[2], 10);
+      const inner = m[3] || "";
       const key = s + "x" + e;
       if (seen[key]) continue;
       seen[key] = true;
-      out.push({
-        name: "T" + s + "E" + e,
-        url: this.siteUrl(m[1]),
+
+      let epTitle = "";
+      const titleMatch =
+        inner.match(/<span[^>]*class=["'][^"']*text-nova-text[^"']*["'][^>]*>([\s\S]*?)<\/span>/i) ||
+        inner.match(/class=["'][^"']*font-semibold[^"']*["'][^>]*>([\s\S]*?)<\/[a-z0-9]+>/i) ||
+        inner.match(/<h\d[^>]*>([\s\S]*?)<\/h\d>/i);
+      if (titleMatch) {
+        epTitle = this.clean(titleMatch[1]);
+      }
+
+      const epUrl = SITE + "/serie/" + slug + "/temporada/" + s + "/capitulo/" + e;
+      const displayName = epTitle ? "E" + e + " - " + epTitle : "Episodio " + e;
+
+      if (!seasonsMap[s]) seasonsMap[s] = [];
+      seasonsMap[s].push({ name: displayName, url: epUrl, s, e });
+    }
+
+    // 2. Método alternativo: href="#sX-eY"
+    if (Object.keys(seasonsMap).length === 0) {
+      const reHash = /<a\s+[^>]*href=["']#s(\d+)-e(\d+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+      while ((m = reHash.exec(String(html || ""))) !== null) {
+        const s = parseInt(m[1], 10);
+        const e = parseInt(m[2], 10);
+        const inner = m[3] || "";
+        const key = s + "x" + e;
+        if (seen[key]) continue;
+        seen[key] = true;
+
+        let epTitle = "";
+        const titleMatch = inner.match(/<span[^>]*class=["'][^"']*text-nova-text[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+        if (titleMatch) epTitle = this.clean(titleMatch[1]);
+
+        const epUrl = SITE + "/serie/" + slug + "/temporada/" + s + "/capitulo/" + e;
+        const displayName = epTitle ? "E" + e + " - " + epTitle : "Episodio " + e;
+
+        if (!seasonsMap[s]) seasonsMap[s] = [];
+        seasonsMap[s].push({ name: displayName, url: epUrl, s, e });
+      }
+    }
+
+    // 3. Método legacy: href="/serie/.../temporada/.../capitulo/..."
+    if (Object.keys(seasonsMap).length === 0) {
+      const reLegacy = /href=["']([^"']*\/serie\/[^"'\/]+\/temporada\/(\d+)\/capitulo\/(\d+)[^"']*)["']/gi;
+      while ((m = reLegacy.exec(String(html || ""))) !== null) {
+        const fullUrl = this.siteUrl(m[1]);
+        const s = parseInt(m[2], 10);
+        const e = parseInt(m[3], 10);
+        const key = s + "x" + e;
+        if (seen[key]) continue;
+        seen[key] = true;
+
+        const displayName = "T" + s + "E" + e;
+        if (!seasonsMap[s]) seasonsMap[s] = [];
+        seasonsMap[s].push({ name: displayName, url: fullUrl, s, e });
+      }
+    }
+
+    const seasonNumbers = Object.keys(seasonsMap).map(Number).sort((a, b) => a - b);
+    const groups = [];
+    for (const sNum of seasonNumbers) {
+      const episodes = seasonsMap[sNum].sort((a, b) => a.e - b.e);
+      groups.push({
+        title: "Temporada " + sNum,
+        urls: episodes.map((it) => ({ name: it.name, url: it.url })),
       });
     }
-    out.sort((a, b) => {
-      const pa = a.name.substring(1).split("E").map(Number);
-      const pb = b.name.substring(1).split("E").map(Number);
-      return pa[0] - pb[0] || pa[1] - pb[1];
-    });
+
+    return groups;
+  }
+
+  episodes(html, base) {
+    const groups = this.seriesEpisodeGroups(html, base);
+    const out = [];
+    for (const g of groups) {
+      out.push(...g.urls);
+    }
     return out;
   }
 
@@ -1025,7 +1098,7 @@ export default class extends Extension {
         typeof setTimeout === "function"
           ? await Promise.race([
               req,
-              new Promise((res) => setTimeout(() => res(""), 2000),
+              new Promise((res) => setTimeout(() => res(""), 2000))
             ])
           : await req;
     } catch (_) {

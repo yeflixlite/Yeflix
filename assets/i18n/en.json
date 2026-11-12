@@ -64,7 +64,9 @@
     "trending": "Trending now",
     "empty-title": "Start your collection",
     "empty-subtitle": "Add sources in Extensions to find and watch anime, movies and series.",
-    "explore": "Explore extensions"
+    "explore": "Explore extensions",
+    "error-title": "Couldn't load the catalog",
+    "error-subtitle": "The sources didn't respond. Check your connection and try again."
   },
   "search": {
     "hint-text": "Please use search wisely!~",

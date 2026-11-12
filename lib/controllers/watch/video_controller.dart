@@ -30,6 +30,9 @@ import 'package:jiruhub/utils/bt_server.dart';
 import 'package:jiruhub/data/services/database_service.dart';
 import 'package:jiruhub/data/services/extension_service.dart';
 import 'package:jiruhub/services/media/media_proxy_server.dart';
+import 'package:jiruhub/services/extraction/direct_source_resolver.dart';
+import 'package:jiruhub/services/extraction/extraction_models.dart';
+import 'package:jiruhub/services/source_provider.dart' show SourceKind;
 import 'package:jiruhub/utils/i18n.dart';
 import 'package:jiruhub/utils/layout.dart';
 import 'package:jiruhub/utils/jiruhub_directory.dart';
@@ -41,7 +44,7 @@ import 'package:crypto/crypto.dart';
 import 'package:jiruhub/utils/jiruhub_storage.dart';
 import 'package:flutter_hls_parser/flutter_hls_parser.dart';
 
-class VideoPlayerController extends GetxController {
+class VideoPlayerController extends GetxController with WidgetsBindingObserver {
   final String title;
   final List<ExtensionEpisode> playList;
   final String detailUrl;
@@ -69,7 +72,36 @@ class VideoPlayerController extends GetxController {
 
   // 播放器
   final player = Player();
-  late final videoController = VideoController(player);
+
+  /// Controlador de video de media_kit.
+  ///
+  /// En Linux se crea con renderizado por software: el contexto GL que usa
+  /// `media_kit_video` por defecto llama a `g_assert_not_reached()` cuando el
+  /// display no es X11/Wayland puro (compositores anidados, sesiones remotas,
+  /// algunos drivers), y ese abort nativo cierra toda la aplicación. El
+  /// renderizado SW usa `FlTextureSW` y evita esa ruta sin cambiar el motor.
+  VideoController? _videoController;
+  VideoController get videoController =>
+      _videoController ??= _createVideoController();
+
+  VideoController _createVideoController() {
+    final configuration = VideoControllerConfiguration(
+      enableHardwareAcceleration: !Platform.isLinux,
+      hwdec: Platform.isLinux ? 'no' : null,
+    );
+    try {
+      return VideoController(player, configuration: configuration);
+    } catch (e, stackTrace) {
+      logger.severe('VideoController init error: $e\n$stackTrace');
+      // Último recurso: forzar software también en el resto de plataformas.
+      return VideoController(
+        player,
+        configuration: const VideoControllerConfiguration(
+          enableHardwareAcceleration: false,
+        ),
+      );
+    }
+  }
 
   /// Controlador nativo de ExoPlayer (solo Android).
   late final ExoPlayerNativeController exo;
@@ -91,6 +123,25 @@ class VideoPlayerController extends GetxController {
   final RxInt exoDurationMs = 0.obs;
   Timer? _exoPositionTimer;
 
+  /// Parámetros con los que se abrió la fuente actual, para poder reabrirla
+  /// igual si la vista nativa se recrea (rotación, vuelta desde segundo plano).
+  String? _exoSourceMimeType;
+  int _exoMaxVideoHeight = 0;
+  int _exoMaxVideoBitrate = 0;
+
+  /// Última posición reproducida conocida. No se sobrescribe con los ceros
+  /// que reporta un reproductor nativo recién creado.
+  int _exoLastPositionMs = 0;
+
+  /// Evita que `onViewAttached` reabra la fuente mientras `playExo` ya lo hace.
+  bool _exoApplyingSource = false;
+
+  /// Evita restauraciones simultáneas tras recrear la vista.
+  bool _exoRestoringView = false;
+
+  /// Intención de reproducción del usuario (para respetar pausa al reabrir).
+  bool _exoWantsPlay = false;
+
   // ── Loader YEFLIX ────────────────────────────────────────────────────────
   /// Carga inicial: desde `play()` hasta el primer frame real del video.
   final isPreparingPlayback = false.obs;
@@ -103,14 +154,41 @@ class VideoPlayerController extends GetxController {
 
   Timer? _loaderWatchdog;
 
+  /// Evita mostrar el loader por rebuffers de milisegundos (cambio de
+  /// superficie al rotar, reconfiguración del decoder, etc.).
+  Timer? _bufferingDebounce;
+
+  /// Durante una rotación la superficie se recompone y el motor puede reportar
+  /// BUFFERING de forma transitoria. En esa ventana no se muestra el loader ni
+  /// se toca la fuente.
+  bool _suppressTransientBuffering = false;
+  Timer? _orientationGrace;
+  Size? _lastViewSize;
+
+  // ── Vigilancia de cortes a mitad de reproducción ─────────────────────────
+  /// Ultima posicion observada y momento en que cambio por ultima vez.
+  int _lastObservedPositionMs = -1;
+  DateTime? _lastProgressAt;
+
+  /// Reintentos automaticos cuando el stream deja de avanzar.
+  Timer? _stallWatchdog;
+  bool _isRecovering = false;
+  DateTime? _lastRecoveryAt;
+  int _stallRecoveryAttempts = 0;
+
   /// El loader solo tapa la UI mientras no hay error ni cast activo.
+  ///
+  /// En Android, con el panel de subtítulos/ajustes abierto no se muestra el
+  /// loader por un rebuffer: el panel es un overlay y no debe tapar el video
+  /// ni interrumpir la reproducción.
   bool get isLoaderVisible =>
       error.value.isEmpty &&
       serverFailedMessage.value.isEmpty &&
       dlnaDevice.value == null &&
       (isGettingWatchData.value ||
           isPreparingPlayback.value ||
-          isBufferingPlayback.value);
+          (isBufferingPlayback.value &&
+              !(Platform.isAndroid && showSidebar.value)));
 
   /// Permite registrar el momento exacto en que mpv deja de buffear.
   bool _wasBuffering = false;
@@ -179,6 +257,13 @@ class VideoPlayerController extends GetxController {
   // 字幕
   final subtitles = <SubtitleTrack>[].obs;
 
+  /// Subtítulo externo activo en Android.
+  ///
+  /// ExoPlayer no recibe las pistas externas del `player` de media_kit, así
+  /// que se dibujan en Flutter sincronizadas con [exoPositionMs]. Cambiar esta
+  /// pista no re-prepara la fuente ni interrumpe la reproducción.
+  final androidSubtitle = Rxn<SubtitleTrack>();
+
   // 画质
   final currentQuality = "".obs;
   final qualityMap = <String, String>{};
@@ -204,6 +289,17 @@ class VideoPlayerController extends GetxController {
   final error = "".obs;
   final isGettingWatchData = true.obs;
   int _playSessionId = 0;
+
+  /// Extraccion directa (solo Android). En escritorio devuelve `null` y el
+  /// flujo sigue usando la extension como siempre.
+  final DirectSourceResolver _directResolver = DirectSourceResolver();
+
+  /// Cache corta de la resolucion de la extension por episodio, para no
+  /// volver a ejecutar el JavaScript si se reproduce el mismo enlace.
+  final Map<String, _WatchCacheEntry> _watchCache = {};
+
+  /// Inicio de la reproduccion actual, para medir hasta el primer fotograma.
+  DateTime? _playStartedAt;
 
   // Selector de servidores (llenado desde X-Servers header de la extensión)
   final availableServers = <String, String>{}.obs; // nombre → embed URL
@@ -243,6 +339,10 @@ class VideoPlayerController extends GetxController {
 
   @override
   void onInit() async {
+    // Observa cambios de tamaño/orientación para no mostrar el loader al girar.
+    WidgetsBinding.instance.addObserver(this);
+    _lastViewSize =
+        WidgetsBinding.instance.platformDispatcher.implicitView?.physicalSize;
     if (Platform.isAndroid) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       if (LayoutUtils.isTablet) {
@@ -331,9 +431,7 @@ class VideoPlayerController extends GetxController {
       exoPlaybackState.value = state;
       isPlaying.value = playing || isPl;
       // Media3: STATE_IDLE = 1, STATE_BUFFERING = 2, STATE_READY = 3, STATE_ENDED = 4
-      if (hasRenderedFirstFrame.value) {
-        isBufferingPlayback.value = state == 2;
-      }
+      _setBuffering(state == 2);
       if (state == 3 || isPl || (state == 2 && playing)) {
         serverFailedMessage.value = '';
         error.value = '';
@@ -343,6 +441,49 @@ class VideoPlayerController extends GetxController {
     exo.onLoadingChanged.listen((loading) {
       exoLoading.value = loading;
     });
+    // La PlatformView puede recrearse (rotación, vuelta desde segundo plano,
+    // cambio de layout). En ese caso el reproductor nativo nace vacío: se
+    // reabre la misma fuente en la última posición, sin loader.
+    exo.onViewAttached.listen((_) => _restoreExoAfterViewRecreated());
+  }
+
+  /// Reabre la fuente actual si la vista nativa se recreó.
+  ///
+  /// Cubre dos casos: la vista no existía cuando `playExo` intentó abrir la
+  /// fuente (los reintentos se agotaron) y la vista se recreó a mitad de
+  /// reproducción (rotación, vuelta desde segundo plano). En ambos se reabre
+  /// la misma fuente en la última posición conocida.
+  Future<void> _restoreExoAfterViewRecreated() async {
+    if (!isExoPlayerActive) return;
+    final url = exoSourceUrl.value;
+    if (url.isEmpty) return;
+    if (_exoApplyingSource || _exoRestoringView) return;
+
+    final resumeAt = _exoLastPositionMs;
+    final wasPlaying = _exoWantsPlay;
+    _exoRestoringView = true;
+    logger.warning(
+      '⏱ [exo] vista nativa disponible/recreada: reabriendo en ${resumeAt}ms',
+    );
+    try {
+      await exo.setSource(
+        url: url,
+        headers: exoHeaders.value,
+        positionMs: resumeAt > 0 ? resumeAt : null,
+        mimeType: _exoSourceMimeType,
+        maxVideoHeight: _exoMaxVideoHeight,
+        maxVideoBitrate: _exoMaxVideoBitrate,
+      );
+      // `setSource` nativo deja playWhenReady=true: se respeta el estado que
+      // tenía el usuario (pausado sigue pausado).
+      await exo.setPlayWhenReady(wasPlaying);
+      // La reproducción continúa: no se reinicia el estado del loader ni se
+      // pierde el primer frame ya confirmado.
+    } catch (e) {
+      logger.severe('No se pudo reabrir ExoPlayer tras recrear la vista: $e');
+    } finally {
+      _exoRestoringView = false;
+    }
   }
 
   /// Callback de error del reproductor nativo ExoPlayer.
@@ -355,7 +496,8 @@ class VideoPlayerController extends GetxController {
     final hasPlaybackProgress =
         hasRenderedFirstFrame.value || exoPositionMs.value > 0;
     if (hasPlaybackProgress) {
-      logger.warning('ExoPlayer error ignorado (reproducción activa): $message');
+      logger
+          .warning('ExoPlayer error ignorado (reproducción activa): $message');
       return;
     }
     exoLoading.value = false;
@@ -387,7 +529,60 @@ class VideoPlayerController extends GetxController {
     isPreparingPlayback.value = true;
     isBufferingPlayback.value = false;
     hasRenderedFirstFrame.value = false;
+    _bufferingDebounce?.cancel();
+    _bufferingDebounce = null;
+    _suppressTransientBuffering = false;
     _startLoaderWatchdog();
+  }
+
+  /// Actualiza el estado de buffering con histéresis.
+  ///
+  /// Un rebuffer real se muestra recién después de ~900 ms para no parpadear
+  /// por microcortes del decoder o por la reconfiguración de la superficie.
+  void _setBuffering(bool buffering) {
+    if (!hasRenderedFirstFrame.value) return;
+    if (!buffering) {
+      _bufferingDebounce?.cancel();
+      _bufferingDebounce = null;
+      isBufferingPlayback.value = false;
+      return;
+    }
+    if (_suppressTransientBuffering || isBufferingPlayback.value) return;
+    _bufferingDebounce?.cancel();
+    _bufferingDebounce = Timer(const Duration(milliseconds: 900), () {
+      if (!hasRenderedFirstFrame.value || _suppressTransientBuffering) return;
+      isBufferingPlayback.value = true;
+    });
+  }
+
+  /// Detecta cambios de tamaño/orientación de la ventana.
+  ///
+  /// Al girar el teléfono la PlatformView se recompone. No se debe recargar la
+  /// fuente: solo se silencia el buffering transitorio durante 2 s para que no
+  /// aparezca el loader. La posición, el buffer y los subtítulos se conservan
+  /// porque ExoPlayer sigue con la misma fuente.
+  @override
+  void didChangeMetrics() {
+    if (!Platform.isAndroid) return;
+    final size =
+        WidgetsBinding.instance.platformDispatcher.implicitView?.physicalSize;
+    if (size == null) return;
+    final previous = _lastViewSize;
+    _lastViewSize = size;
+    if (previous == null || previous == size) return;
+    if (!hasRenderedFirstFrame.value) return;
+    _suppressTransientBuffering = true;
+    _bufferingDebounce?.cancel();
+    _bufferingDebounce = null;
+    isBufferingPlayback.value = false;
+    _orientationGrace?.cancel();
+    _orientationGrace = Timer(const Duration(seconds: 2), () {
+      _suppressTransientBuffering = false;
+    });
+    logger.info(
+      '⏱ [android] cambio de orientación/tamaño '
+      '${size.width.toInt()}x${size.height.toInt()} (sin recargar)',
+    );
   }
 
   /// Oculta el loader cuando el reproductor ya mostró un frame real.
@@ -396,14 +591,27 @@ class VideoPlayerController extends GetxController {
     hasRenderedFirstFrame.value = true;
     isPreparingPlayback.value = false;
     isBufferingPlayback.value = false;
+    _bufferingDebounce?.cancel();
+    _bufferingDebounce = null;
     _loaderWatchdog?.cancel();
     _loaderWatchdog = null;
+    _lastProgressAt = DateTime.now();
+    _startStallWatchdog();
+    final startedAt = _playStartedAt;
+    if (startedAt != null) {
+      logger.info(
+        '⏱ [T+${DateTime.now().difference(startedAt).inMilliseconds}ms] '
+        'primer fotograma en pantalla',
+      );
+    }
   }
 
   /// Oculta el loader sin marcar un frame (error o cancelación).
   void _finishLoader() {
     isPreparingPlayback.value = false;
     isBufferingPlayback.value = false;
+    _bufferingDebounce?.cancel();
+    _bufferingDebounce = null;
     _loaderWatchdog?.cancel();
     _loaderWatchdog = null;
   }
@@ -426,25 +634,165 @@ class VideoPlayerController extends GetxController {
     });
   }
 
+  // ── Recuperación automática a mitad de reproducción ──────────────────────
+
+  void _startStallWatchdog() {
+    _stallWatchdog ??= Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_checkStall());
+    });
+  }
+
+  /// Registra avance real de posición. Si el valor no cambia, el reproductor
+  /// está atascado aunque siga en estado "playing".
+  void _notePlaybackProgress(int ms) {
+    if (ms < 0 || ms == _lastObservedPositionMs) return;
+    _lastObservedPositionMs = ms;
+    _lastProgressAt = DateTime.now();
+    if (_lastRecoveryAt != null &&
+        DateTime.now().difference(_lastRecoveryAt!) >
+            const Duration(seconds: 60)) {
+      _stallRecoveryAttempts = 0;
+      _lastRecoveryAt = null;
+    }
+  }
+
+  void _resetStallState() {
+    _lastObservedPositionMs = -1;
+    _lastProgressAt = null;
+    _stallRecoveryAttempts = 0;
+    _lastRecoveryAt = null;
+    _isRecovering = false;
+  }
+
+  bool get _wantsPlayback {
+    if (isExoPlayerActive) {
+      return isPlaying.value || exoPlaybackState.value == 2;
+    }
+    return player.state.playing || player.state.buffering;
+  }
+
+  Future<void> _checkStall() async {
+    if (!hasRenderedFirstFrame.value || _isRecovering) return;
+    final dur = duration.value;
+    final pos = position.value;
+    if (dur.inMilliseconds > 0 &&
+        pos.inMilliseconds >= dur.inMilliseconds - 3000) {
+      return;
+    }
+    if (!_wantsPlayback) return;
+    final last = _lastProgressAt;
+    if (last == null) return;
+    if (DateTime.now().difference(last) < const Duration(seconds: 25)) return;
+    if (_lastRecoveryAt != null &&
+        DateTime.now().difference(_lastRecoveryAt!) <
+            const Duration(seconds: 45)) {
+      return;
+    }
+    if (_stallRecoveryAttempts >= 3) {
+      if (serverFailedMessage.value.isEmpty) {
+        serverFailedMessage.value =
+            'La reproducción se interrumpió varias veces. Cambia de servidor '
+            'o vuelve a intentarlo.';
+      }
+      return;
+    }
+    await _recoverPlayback();
+  }
+
+  Future<void> _recoverPlayback() async {
+    if (_isRecovering) return;
+    _isRecovering = true;
+    _stallRecoveryAttempts++;
+    _lastRecoveryAt = DateTime.now();
+    final posMs = isExoPlayerActive
+        ? exoPositionMs.value
+        : position.value.inMilliseconds;
+    logger.warning(
+      '⏱ Reproducción estancada; recuperando en ${posMs}ms '
+      '(intento $_stallRecoveryAttempts)',
+    );
+    try {
+      if (isExoPlayerActive) {
+        await exo.recover(positionMs: posMs);
+        await Future.delayed(const Duration(seconds: 8));
+        final advanced = exoPositionMs.value > posMs + 500;
+        if (!advanced && watchData != null && _stallRecoveryAttempts <= 2) {
+          logger.warning('ExoPlayer no avanzó; reabriendo fuente en $posMs ms');
+          await _tryOpenExo(
+            watchData!.url,
+            watchData!.headers,
+            positionMs: posMs,
+          );
+        }
+      } else {
+        // mpv: un seek al mismo punto cancela la petición colgada y vuelve a
+        // pedir el segmento actual sin reabrir todo el stream.
+        await player.seek(Duration(milliseconds: posMs));
+        await Future.delayed(const Duration(seconds: 8));
+        final advanced = position.value.inMilliseconds > posMs + 500;
+        if (!advanced && watchData != null && _stallRecoveryAttempts <= 2) {
+          logger.warning('mpv no avanzó; reabriendo fuente en $posMs ms');
+          final hint = watchData?.type == ExtensionWatchBangumiType.hls;
+          final ok = await _tryOpenPlayer(
+            watchData!.url,
+            watchData!.headers,
+            hintHls: hint,
+          );
+          if (ok) {
+            await player.seek(Duration(milliseconds: posMs));
+            await player.play();
+          }
+        }
+      }
+    } catch (e) {
+      logger.warning('Recuperación de reproducción falló: $e');
+    } finally {
+      _isRecovering = false;
+      _lastProgressAt = DateTime.now();
+    }
+  }
+
   /// Abre una fuente en ExoPlayer nativo (Android).
   Future<bool> playExo({
     required String url,
     Map<String, String>? headers,
     int? positionMs,
     String? mimeType,
+    int? maxVideoHeight,
+    int? maxVideoBitrate,
   }) async {
     if (!isExoPlayerActive) return false;
     exoSourceUrl.value = url;
-    if (headers != null) exoHeaders.value = headers;
+    // Siempre se reflejan las cabeceras de la fuente actual: la vista las
+    // reenvía en un rebuild y el nativo compara URL+cabeceras para decidir si
+    // debe re-preparar. Si quedaran cabeceras viejas, un rebuild podría
+    // reiniciar el video.
+    exoHeaders.value = headers ?? const <String, String>{};
+    // Se recuerdan los parámetros exactos para poder reabrir la misma fuente
+    // si la vista nativa se recrea.
+    _exoSourceMimeType = mimeType;
+    _exoMaxVideoHeight = maxVideoHeight ?? 0;
+    _exoMaxVideoBitrate = maxVideoBitrate ?? 0;
+    _exoLastPositionMs = positionMs ?? 0;
+    _exoWantsPlay = true;
     exoLoading.value = true;
+    _exoApplyingSource = true;
     try {
+      final setSourceWatch = Stopwatch()..start();
       await exo.setSource(
         url: url,
         headers: headers,
         positionMs: positionMs,
         mimeType: mimeType,
+        maxVideoHeight: maxVideoHeight,
+        maxVideoBitrate: maxVideoBitrate,
       );
-      await exo.setPlayWhenReady(true);
+      final host = Uri.tryParse(url)?.host ?? 'local';
+      logger.info(
+        '⏱ [exo] setSource ${setSourceWatch.elapsedMilliseconds}ms host=$host',
+      );
+      // `setSource` nativo ya deja playWhenReady=true; no se envía otro
+      // round-trip al canal para arrancar antes.
       isPlaying.value = true;
       exoIsPlaying.value = true;
       _startExoPositionTimer();
@@ -453,12 +801,15 @@ class VideoPlayerController extends GetxController {
       logger.severe('playExo error: $e');
       onExoError(e.toString());
       return false;
+    } finally {
+      _exoApplyingSource = false;
     }
   }
 
   /// Pausa/ reanuda en ExoPlayer nativo.
   Future<void> setExoPlayWhenReady(bool value) async {
     if (!isExoPlayerActive) return;
+    _exoWantsPlay = value;
     await exo.setPlayWhenReady(value);
     exoIsPlaying.value = value;
     isPlaying.value = value;
@@ -479,11 +830,19 @@ class VideoPlayerController extends GetxController {
       if (!isExoPlayerActive) return;
       final pos = await exo.positionMs();
       if (pos >= 0) {
-        exoPositionMs.value = pos;
-        position.value = Duration(milliseconds: pos);
+        // Mientras se restaura una vista recreada no se pisa la posición con
+        // los ceros del reproductor recién creado.
+        final staleZero = _exoRestoringView && pos < _exoLastPositionMs;
+        if (!staleZero) {
+          exoPositionMs.value = pos;
+          position.value = Duration(milliseconds: pos);
+        }
+        _notePlaybackProgress(pos);
         if (pos > 0) {
+          if (!_exoRestoringView) _exoLastPositionMs = pos;
           // Si la posición ya avanzó, el video se está reproduciendo con éxito
-          if (serverFailedMessage.value.isNotEmpty) serverFailedMessage.value = '';
+          if (serverFailedMessage.value.isNotEmpty)
+            serverFailedMessage.value = '';
           if (error.value.isNotEmpty) error.value = '';
           if (isGettingWatchData.value) isGettingWatchData.value = false;
         }
@@ -497,7 +856,8 @@ class VideoPlayerController extends GetxController {
       exoIsPlaying.value = playing;
       isPlaying.value = playing;
       if (playing) {
-        if (serverFailedMessage.value.isNotEmpty) serverFailedMessage.value = '';
+        if (serverFailedMessage.value.isNotEmpty)
+          serverFailedMessage.value = '';
         if (error.value.isNotEmpty) error.value = '';
         if (isGettingWatchData.value) isGettingWatchData.value = false;
       }
@@ -506,10 +866,22 @@ class VideoPlayerController extends GetxController {
 
   @override
   void onClose() async {
+    WidgetsBinding.instance.removeObserver(this);
     _exoPositionTimer?.cancel();
     _loaderWatchdog?.cancel();
+    _bufferingDebounce?.cancel();
+    _bufferingDebounce = null;
+    _orientationGrace?.cancel();
+    _orientationGrace = null;
+    _stallWatchdog?.cancel();
+    _stallWatchdog = null;
     if (isExoPlayerActive) {
-      await exo.dispose();
+      try {
+        await exo.dispose();
+      } catch (e) {
+        // El canal nativo puede haberse liberado antes que el controlador.
+        logger.warning('exo.dispose error: $e');
+      }
     }
     if (JiruHubStorage.getSetting(SettingKey.autoTracking) && anilistID != "") {
       AniListProvider.editList(
@@ -639,9 +1011,7 @@ class VideoPlayerController extends GetxController {
         logger.info('⏱ buffering=false — primer frame listo');
       }
       _wasBuffering = buffering;
-      if (hasRenderedFirstFrame.value) {
-        isBufferingPlayback.value = buffering;
-      }
+      _setBuffering(buffering);
     });
 
     // Primer frame real en media_kit: el ancho solo se conoce cuando el video
@@ -777,6 +1147,7 @@ class VideoPlayerController extends GetxController {
         return;
       }
       position.value = event;
+      _notePlaybackProgress(event.inMilliseconds);
       if (event.inMilliseconds > 0) {
         // La posición avanzó: hay un frame real en pantalla.
         _markFirstFrame();
@@ -796,8 +1167,8 @@ class VideoPlayerController extends GetxController {
       // Solo un frame real (o progreso de posición) prueba que hay imagen.
       // `player.state.playing` es optimista durante la carga inicial y podría
       // ocultar un fallo real dejando el loader girando hasta el watchdog.
-      final isAlreadyPlaying = hasRenderedFirstFrame.value ||
-          player.state.position.inSeconds > 0;
+      final isAlreadyPlaying =
+          hasRenderedFirstFrame.value || player.state.position.inSeconds > 0;
       if (!isAlreadyPlaying &&
           (event.toLowerCase().contains('not found') ||
               event.toLowerCase().contains('403') ||
@@ -827,11 +1198,18 @@ class VideoPlayerController extends GetxController {
     }
     final sessionId = ++_playSessionId;
     _beginLoader();
+    _resetStallState();
     // ── TIMING DIAGNÓSTICO ─────────────────────────────────────────────────
     final _t0 = DateTime.now();
+    _playStartedAt = _t0;
     logger.info('⏱ [T+0ms] play() iniciado para index: ${index.value}');
     // ───────────────────────────────────────────────────────────────────────
-    player.stop();
+    // En Android el motor es ExoPlayer; parar el player de media_kit (que no
+    // se usa) solo añade trabajo al arranque. En escritorio se conserva para
+    // liberar la fuente anterior antes de abrir la nueva.
+    if (!isExoPlayerActive) {
+      player.stop();
+    }
     isGettingWatchData.value = true;
     error.value = '';
     serverFailedMessage.value = '';
@@ -868,7 +1246,8 @@ class VideoPlayerController extends GetxController {
       return;
     }
 
-    logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] getWatchData() START (runtime.watch)');
+    logger.info(
+        '⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] getWatchData() START (runtime.watch)');
     try {
       await getWatchData();
     } catch (e) {
@@ -880,8 +1259,9 @@ class VideoPlayerController extends GetxController {
       isGettingWatchData.value = false;
       return;
     }
-    final _urlPreview = (watchData?.url ?? '').substring(0, (watchData?.url?.length ?? 0).clamp(0, 80));
-    logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] getWatchData() END — url: $_urlPreview');
+    final _urlPreview = Uri.tryParse(watchData?.url ?? '')?.host ?? '?';
+    logger.info(
+        '⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] getWatchData() END — host: $_urlPreview');
 
     if (sessionId != _playSessionId) return;
 
@@ -912,16 +1292,19 @@ class VideoPlayerController extends GetxController {
         } else {
           final primaryUrl = watchData!.url;
 
-          logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() START — servidor: ${currentServerName.value}');
-          logger.info('   URL: $primaryUrl');
-          logger.info('   Headers: ${watchData!.headers}');
+          logger.info(
+              '⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() START — servidor: ${currentServerName.value}');
+          logger.info('   host=${Uri.tryParse(primaryUrl)?.host ?? '?'}');
+          logger.info('   header-keys=${watchData!.headers?.keys.toList()}');
           bool worked = await _openStream(primaryUrl, watchData!.headers);
-          
+
           if (worked) {
-            // Solo si el video ya arrancó, cargamos la lista de calidades en background
-            unawaited(getQuality());
+            // Las calidades se cargan despues del primer fotograma para no
+            // competir por ancho de banda con el arranque de ExoPlayer.
+            _scheduleQualityLoad();
           }
-          logger.info('⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() END — worked=$worked');
+          logger.info(
+              '⏱ [T+${DateTime.now().difference(_t0).inMilliseconds}ms] _openStream() END — worked=$worked');
           if (sessionId != _playSessionId) return;
 
           if (!worked &&
@@ -972,11 +1355,24 @@ class VideoPlayerController extends GetxController {
                 serverFailedMessage.value =
                     'Servidor "${currentServerName.value}" no disponible, '
                     'probando "${entry.key}"...';
-                final rawAlt = await runtime!.watch(entry.value);
-                if (sessionId != _playSessionId) return;
-                if (rawAlt == null) continue;
-                var alt = rawAlt as ExtensionBangumiWatch;
-                logger.info('Failover ${entry.key} URL: ${alt.url}');
+                ExtensionBangumiWatch alt;
+                final directAlt = Platform.isAndroid
+                    ? await _directResolver.resolveSource(entry.value)
+                    : null;
+                if (directAlt != null) {
+                  alt = _watchFromExtracted(directAlt);
+                  logger.info(
+                    'Failover ${entry.key}: ${directAlt.server.label} directo',
+                  );
+                } else {
+                  final rawAlt = await runtime!.watch(entry.value);
+                  if (sessionId != _playSessionId) return;
+                  if (rawAlt == null) continue;
+                  alt = rawAlt as ExtensionBangumiWatch;
+                }
+                logger.info(
+                  'Failover ${entry.key} host=${Uri.tryParse(alt.url)?.host ?? '?'}',
+                );
                 if (alt.url.startsWith('error://')) {
                   final errorMsg = alt.url.replaceFirst('error://', '');
                   logger.severe(
@@ -988,6 +1384,18 @@ class VideoPlayerController extends GetxController {
                 bool altWorked = await _openStream(alt.url, alt.headers);
                 if (sessionId != _playSessionId) return;
 
+                // Si la fuente directa no arranco, se reintenta con la
+                // extension antes de descartar el servidor.
+                if (!altWorked && directAlt != null) {
+                  _directResolver.invalidate(entry.value);
+                  final fallback = await _extensionWatch(entry.value);
+                  if (fallback != null) {
+                    alt = fallback;
+                    altWorked = await _openStream(alt.url, alt.headers);
+                    if (sessionId != _playSessionId) return;
+                  }
+                }
+
                 if (!altWorked &&
                     alt.headers != null &&
                     alt.headers!.containsKey('X-Netu-Alts')) {
@@ -996,10 +1404,8 @@ class VideoPlayerController extends GetxController {
                         jsonDecode(alt.headers!['X-Netu-Alts']!);
                     for (final altUrlDyn in alts) {
                       final altUrlStr = altUrlDyn.toString();
-                      logger
-                          .info('Failover probando alternativa: $altUrlStr');
-                      altWorked =
-                          await _openStream(altUrlStr, alt.headers);
+                      logger.info('Failover probando alternativa: $altUrlStr');
+                      altWorked = await _openStream(altUrlStr, alt.headers);
                       if (altWorked) {
                         alt = ExtensionBangumiWatch(
                           type: alt.type,
@@ -1012,8 +1418,8 @@ class VideoPlayerController extends GetxController {
                       }
                     }
                   } catch (e) {
-                    logger.warning(
-                        'Error parseando X-Netu-Alts en failover: $e');
+                    logger
+                        .warning('Error parseando X-Netu-Alts en failover: $e');
                   }
                 }
 
@@ -1078,6 +1484,7 @@ class VideoPlayerController extends GetxController {
         );
       }
       player.setSubtitleTrack(SubtitleTrack.no());
+      androidSubtitle.value = null;
     } on StartServerException catch (_) {
       // 如果是 启动 bt server 失败
       if (Platform.isAndroid) {
@@ -1114,18 +1521,68 @@ class VideoPlayerController extends GetxController {
   getWatchData() async {
     watchData = null;
     subtitles.clear();
+    androidSubtitle.value = null;
     availableServers.clear();
     serverReferers.clear();
     serverFailedMessage.value = '';
     final playUrl = playList[index.value].url;
-    final _tw0 = DateTime.now();
-    logger.info('⏱ [watch] runtime.watch() START → $playUrl');
-    final res = await runtime!.watch(playUrl);
-    logger.info('⏱ [watch] runtime.watch() DONE — ${DateTime.now().difference(_tw0).inMilliseconds}ms — resultado: ${res == null ? 'null' : 'ok'}');
-    if (res == null) {
-      throw 'No se pudo obtener información del video.';
+
+    // Android: si el episodio ya es un embed de VidHide/StreamWish o una
+    // fuente de video directa, se resuelve en Dart sin ejecutar la extension.
+    if (Platform.isAndroid) {
+      final mediaKind = DirectSourceResolver.directMediaKind(playUrl);
+      if (mediaKind != null) {
+        final parsed = Uri.tryParse(playUrl);
+        final origin = parsed != null && parsed.host.isNotEmpty
+            ? '${parsed.scheme}://${parsed.host}'
+            : '';
+        watchData = ExtensionBangumiWatch(
+          type: mediaKind == SourceKind.hls
+              ? ExtensionWatchBangumiType.hls
+              : ExtensionWatchBangumiType.mp4,
+          url: playUrl,
+          headers: {
+            if (origin.isNotEmpty) 'Referer': '$origin/',
+            'User-Agent': kExtractionUserAgent,
+          },
+        );
+        logger.info('⏱ [watch] fuente directa ya reproducible — sin extension');
+        currentServerName.value = 'Directo';
+        return;
+      }
+
+      final direct = await _directResolver.resolveSource(playUrl);
+      if (direct != null) {
+        watchData = _watchFromExtracted(direct);
+        currentServerName.value = direct.server.label;
+        logger.info(
+          '⏱ [watch] extraccion directa ${direct.server.label} — sin extension',
+        );
+        return;
+      }
     }
-    watchData = res as ExtensionBangumiWatch;
+
+    // Cache corta (solo Android): el mismo episodio no vuelve a ejecutar el
+    // JavaScript. En escritorio se conserva el flujo original.
+    final cached = Platform.isAndroid ? _cachedWatchFor(playUrl) : null;
+    if (cached != null) {
+      watchData = cached;
+      logger.info('⏱ [watch] cache local del episodio — sin extension');
+    } else {
+      final _tw0 = DateTime.now();
+      logger.info(
+          '⏱ [watch] runtime.watch() START → ${Uri.tryParse(playUrl)?.host ?? '?'}');
+      final res = await runtime!.watch(playUrl);
+      logger.info(
+          '⏱ [watch] runtime.watch() DONE — ${DateTime.now().difference(_tw0).inMilliseconds}ms — resultado: ${res == null ? 'null' : 'ok'}');
+      if (res == null) {
+        throw 'No se pudo obtener información del video.';
+      }
+      watchData = res as ExtensionBangumiWatch;
+      if (Platform.isAndroid) {
+        _storeWatchCache(playUrl, watchData!);
+      }
+    }
 
     final headers = watchData?.headers;
     if (headers != null) {
@@ -1159,6 +1616,91 @@ class VideoPlayerController extends GetxController {
     }
   }
 
+  /// Convierte una fuente del extractor directo al modelo que usa el player.
+  ExtensionBangumiWatch _watchFromExtracted(ExtractedSource source) {
+    final headers = <String, String>{...source.headers};
+    if (source.referer != null) {
+      headers.putIfAbsent('Referer', () => source.referer!);
+    }
+    return ExtensionBangumiWatch(
+      type: source.isHls
+          ? ExtensionWatchBangumiType.hls
+          : ExtensionWatchBangumiType.mp4,
+      url: source.url,
+      headers: headers.isEmpty ? null : headers,
+    );
+  }
+
+  /// Reintenta la resolucion con la extension (respaldo del extractor directo).
+  Future<ExtensionBangumiWatch?> _extensionWatch(String embedUrl) async {
+    try {
+      final res = await runtime?.watch(embedUrl);
+      if (res == null) return null;
+      final watch = res as ExtensionBangumiWatch;
+      if (watch.url.startsWith('error://')) return null;
+      return watch;
+    } catch (e) {
+      logger.warning('⏱ [fallback] extension fallo: $e');
+      return null;
+    }
+  }
+
+  /// Recupera la resolucion cacheada del episodio, si sigue vigente.
+  ExtensionBangumiWatch? _cachedWatchFor(String playUrl) {
+    final entry = _watchCache[playUrl];
+    if (entry == null) return null;
+    if (DateTime.now().difference(entry.savedAt) > const Duration(minutes: 4)) {
+      _watchCache.remove(playUrl);
+      return null;
+    }
+    return ExtensionBangumiWatch(
+      type: entry.type,
+      url: entry.url,
+      headers: entry.headers == null
+          ? null
+          : Map<String, String>.from(entry.headers!),
+      subtitles: entry.subtitles
+          ?.map(
+            (s) => ExtensionBangumiWatchSubtitle(
+              title: s.title,
+              url: s.url,
+              language: s.language,
+            ),
+          )
+          .toList(),
+      audioTrack: entry.audioTrack,
+    );
+  }
+
+  /// Guarda una copia de la resolucion de la extension para el episodio.
+  ///
+  /// Debe llamarse antes de limpiar las cabeceras `X-*`, porque la cache
+  /// tambien conserva la lista de servidores del episodio.
+  void _storeWatchCache(String playUrl, ExtensionBangumiWatch watch) {
+    if (watch.url.startsWith('error://')) return;
+    _watchCache[playUrl] = _WatchCacheEntry(
+      url: watch.url,
+      type: watch.type,
+      headers: watch.headers == null
+          ? null
+          : Map<String, String>.from(watch.headers!),
+      subtitles: watch.subtitles
+          ?.map(
+            (s) => ExtensionBangumiWatchSubtitle(
+              title: s.title,
+              url: s.url,
+              language: s.language,
+            ),
+          )
+          .toList(),
+      audioTrack: watch.audioTrack,
+      savedAt: DateTime.now(),
+    );
+    if (_watchCache.length > 20) {
+      _watchCache.remove(_watchCache.keys.first);
+    }
+  }
+
   // Cambia al servidor — extrae su stream URL on-demand llamando watch(embedUrl)
   switchServer(String name) async {
     if (!availableServers.containsKey(name) || runtime == null) return;
@@ -1166,14 +1708,34 @@ class VideoPlayerController extends GetxController {
     error.value = '';
     isGettingWatchData.value = true;
     _beginLoader();
+    _resetStallState();
 
     final embedUrl = availableServers[name]!;
     ExtensionBangumiWatch newWatch;
+    var usedDirect = false;
     try {
-      // Mode 2: la extensión detecta que es un embed URL y extrae directamente
-      final res = await runtime!.watch(embedUrl);
-      if (res == null) throw 'Servidor no disponible';
-      newWatch = res as ExtensionBangumiWatch;
+      // Android: primero el extractor directo (sin JavaScript ni sondeo extra).
+      final switchWatch = Stopwatch()..start();
+      ExtractedSource? direct;
+      if (Platform.isAndroid) {
+        direct = await _directResolver.resolveSource(embedUrl);
+      }
+      if (direct != null) {
+        newWatch = _watchFromExtracted(direct);
+        usedDirect = true;
+        logger.info(
+          '⏱ [switch] ${direct.server.label} directo en '
+          '${switchWatch.elapsedMilliseconds}ms',
+        );
+      } else {
+        // Mode 2: la extensión detecta que es un embed URL y extrae directamente
+        final res = await runtime!.watch(embedUrl);
+        if (res == null) throw 'Servidor no disponible';
+        newWatch = res as ExtensionBangumiWatch;
+        logger.info(
+          '⏱ [switch] extension en ${switchWatch.elapsedMilliseconds}ms',
+        );
+      }
     } catch (e) {
       logger.severe(e);
       _finishLoader();
@@ -1210,8 +1772,38 @@ class VideoPlayerController extends GetxController {
     );
     _isAutoSeekPosition = true;
 
-    final worked = await _openStream(newWatch.url, watchData?.headers);
-    if (!worked) {
+    var opened = await _openStream(newWatch.url, watchData?.headers);
+
+    // Fallback: la extraccion directa obtuvo una fuente pero ExoPlayer no
+    // arranco. Se invalida la cache y se reintenta con la extension.
+    if (!opened && usedDirect) {
+      _directResolver.invalidate(embedUrl);
+      logger.warning(
+        '⏱ [switch] fuente directa no arranco, reintentando con extension',
+      );
+      final fallback = await _extensionWatch(embedUrl);
+      if (fallback != null) {
+        final fallbackHeaders = <String, String>{};
+        final fallbackReferer =
+            fallback.headers?['Referer'] ?? serverReferers[name];
+        if (fallbackReferer != null) {
+          fallbackHeaders['Referer'] = fallbackReferer;
+        }
+        if (fallback.headers != null) {
+          fallbackHeaders.addAll(fallback.headers!);
+        }
+        watchData = ExtensionBangumiWatch(
+          type: fallback.type,
+          url: fallback.url,
+          subtitles: fallback.subtitles ?? watchData?.subtitles,
+          headers: fallbackHeaders.isEmpty ? null : fallbackHeaders,
+          audioTrack: fallback.audioTrack ?? watchData?.audioTrack,
+        );
+        opened = await _openStream(fallback.url, watchData?.headers);
+      }
+    }
+
+    if (!opened) {
       _finishLoader();
       serverFailedMessage.value =
           'No se pudo conectar al servidor "$name". Intenta otro.';
@@ -1260,10 +1852,26 @@ class VideoPlayerController extends GetxController {
   }
 
   // 获取画质
+  /// Carga la lista de calidades sin frenar el primer fotograma (Android).
+  void _scheduleQualityLoad() {
+    if (!Platform.isAndroid) {
+      unawaited(getQuality());
+      return;
+    }
+    final session = _playSessionId;
+    unawaited(() async {
+      if (!hasRenderedFirstFrame.value) {
+        await Future.delayed(const Duration(milliseconds: 1200));
+      }
+      if (session != _playSessionId) return;
+      await getQuality();
+    }());
+  }
+
   getQuality() async {
     final url = watchData!.url;
     final headers = watchData!.headers;
-    logger.info(url);
+    logger.info('getQuality host=${Uri.tryParse(url)?.host ?? '?'}');
 
     late dynamic response;
     try {
@@ -1328,20 +1936,28 @@ class VideoPlayerController extends GetxController {
     }
 
     if (playlist is HlsMasterPlaylist) {
-      final urlList = playlist.mediaPlaylistUrls
-          .map(
-            (e) => e.toString(),
-          )
-          .toList();
-      final resolution = playlist.variants.map(
-        (it) => "${it.format.width}x${it.format.height}",
-      );
-      qualityMap.addAll(
-        Map.fromIterables(
-          resolution,
-          urlList,
-        ),
-      );
+      // VidHide: su CDN no sostiene 1080p (~3.2 Mbps) y el buffer se vacia a
+      // mitad de video. Se ocultan las variantes >720p para que no se pueda
+      // volver a elegir la calidad que provoca los cortes. Si el master solo
+      // trae variantes altas, se muestran todas para no dejar el menu vacio.
+      final limitHeight = _isVidHideSource(url) ? 720 : 0;
+      var variants = playlist.variants.toList();
+      if (limitHeight > 0) {
+        final allowed = variants
+            .where((it) =>
+                it.format.height == null || it.format.height! <= limitHeight)
+            .toList();
+        if (allowed.isNotEmpty) variants = allowed;
+      }
+      final entries = <String, String>{};
+      for (final variant in variants) {
+        final resolution =
+            "${variant.format.width}x${variant.format.height}";
+        entries[resolution] = variant.url.toString();
+      }
+      qualityMap
+        ..clear()
+        ..addAll(entries);
     }
   }
 
@@ -1361,6 +1977,7 @@ class VideoPlayerController extends GetxController {
   // 切换画质
   switchQuality(String qualityUrl) async {
     _beginLoader();
+    _resetStallState();
     final currentMs = isExoPlayerActive
         ? exoPositionMs.value
         : player.state.position.inMilliseconds;
@@ -1372,7 +1989,7 @@ class VideoPlayerController extends GetxController {
     if (isExoPlayerActive) {
       await playExo(
         url: qualityUrl,
-        headers: headers,
+        headers: cleanHeaders,
         positionMs: currentMs,
       );
     } else {
@@ -1409,6 +2026,13 @@ class VideoPlayerController extends GetxController {
 
   // 设置字幕
   setSubtitleTrack(SubtitleTrack subtitle) {
+    if (Platform.isAndroid) {
+      final isOff = subtitle.id == 'no' || subtitle.id == 'auto';
+      androidSubtitle.value = isOff ? null : subtitle;
+      // Si hay subtítulo externo se apagan las pistas de texto nativas para
+      // no duplicar; al desactivarlo se vuelven a habilitar.
+      unawaited(exo.setSubtitlesEnabled(isOff));
+    }
     player.setSubtitleTrack(subtitle);
     JiruHubStorage.setSetting(
       SettingKey.subtitleLastLanguageSelected,
@@ -1518,12 +2142,12 @@ class VideoPlayerController extends GetxController {
       return;
     }
     final data = File(file.files.first.path!).readAsStringSync();
-    subtitles.add(
-      SubtitleTrack.data(
-        data,
-        title: file.files.first.name,
-      ),
+    final track = SubtitleTrack.data(
+      data,
+      title: file.files.first.name,
     );
+    subtitles.add(track);
+    setSubtitleTrack(track);
   }
 
   // 连接 DLNA 设备
@@ -1578,6 +2202,10 @@ class VideoPlayerController extends GetxController {
     duration.value = Duration(seconds: positionParser.TrackDurationInt);
   }
 
+  /// Cache corta de hosts alcanzables (Linux), para no repetir el sondeo TCP
+  /// en cada cambio de episodio/servidor. Solo se cachean resultados positivos.
+  final Map<String, DateTime> _reachableHosts = {};
+
   // Verifica si el host de una URL es alcanzable vía TCP.
   // Dart maneja EHOSTUNREACH (errno 113) limpiamente;
   // libmpv/libavformat tienen un bug que causa SIGSEGV con ese errno.
@@ -1588,12 +2216,19 @@ class VideoPlayerController extends GetxController {
       final port = (uri.hasPort && uri.port > 0)
           ? uri.port
           : (uri.scheme == 'https' ? 443 : 80);
+      final key = '${uri.host}:$port';
+      final cached = _reachableHosts[key];
+      if (cached != null &&
+          DateTime.now().difference(cached) < const Duration(minutes: 2)) {
+        return true;
+      }
       final socket = await Socket.connect(
         uri.host,
         port,
         timeout: const Duration(seconds: 2),
       );
       socket.destroy();
+      _reachableHosts[key] = DateTime.now();
       logger.info('Host alcanzable: ${uri.host}:$port');
       return true;
     } on SocketException catch (e) {
@@ -1605,13 +2240,15 @@ class VideoPlayerController extends GetxController {
   }
 
   // Intenta abrir el stream con ExoPlayer (Android).
-  Future<bool> _tryOpenExo(String url, Map<String, String>? headers) async {
+  Future<bool> _tryOpenExo(
+    String url,
+    Map<String, String>? headers, {
+    int? positionMs,
+  }) async {
     if (url.startsWith('error://')) {
       logger.severe('URL de error recibida: $url');
       return false;
     }
-    final started = await playExo(url: url, headers: headers);
-    if (!started) return false;
 
     final completer = Completer<bool>();
     final subs = <StreamSubscription>[];
@@ -1619,8 +2256,10 @@ class VideoPlayerController extends GetxController {
       if (!completer.isCompleted) completer.complete(ok);
     }
 
-    // Solo aceptar como éxito real: primer frame renderizado o isPlaying=true
-    // NO aceptar STATE_BUFFERING(2) solo, ya que no garantiza reproducción real
+    // Las suscripciones se registran ANTES de preparar la fuente: si el CDN
+    // responde muy rápido no se pierde el evento del primer fotograma.
+    // Solo se acepta como éxito real primer frame o isPlaying=true;
+    // STATE_BUFFERING(2) por sí solo no garantiza reproducción.
     subs.add(exo.onRenderedFirstFrame.listen((_) {
       logger.info('_tryOpenExo: primer frame renderizado -> OK');
       finish(true);
@@ -1637,7 +2276,6 @@ class VideoPlayerController extends GetxController {
       final state = args['playbackState'] as int? ?? 0;
       final isPl = args['isPlaying'] as bool? ?? false;
       // Media3: STATE_READY = 3 (stream confirmado listo para reproducir)
-      // No aceptar STATE_BUFFERING (2) solo, puede ser buffering de stream roto
       if (state == 3 || isPl) {
         logger.info('_tryOpenExo: state=$state isPl=$isPl -> OK');
         finish(true);
@@ -1650,10 +2288,30 @@ class VideoPlayerController extends GetxController {
         logger.severe('_tryOpenExo error: $err');
         finish(false);
       } else {
-        // Error en stream que ya se reproduce (p.ej. segmento 4xx de thumbnail) - ignorar
-        logger.warning('_tryOpenExo error ignorado (ya hay reproducción): $err');
+        // Error en stream que ya se reproduce (p.ej. segmento 4xx) - ignorar
+        logger
+            .warning('_tryOpenExo error ignorado (ya hay reproducción): $err');
       }
     }));
+
+    // VidHide: el CDN entrega ~400 KB/s por conexion. 1080p (~3.2 Mbps)
+    // consume mas de lo que baja y el buffer termina vaciandose; 720p
+    // (~1.9 Mbps) deja margen suficiente. StreamWish y el resto no se tocan.
+    final vidhide = _isVidHideSource(url);
+    final started = await playExo(
+      url: url,
+      headers: headers,
+      mimeType: _exoMimeType(url),
+      positionMs: positionMs,
+      maxVideoHeight: vidhide ? 720 : null,
+      maxVideoBitrate: vidhide ? 2500000 : null,
+    );
+    if (!started) {
+      for (final sub in subs) {
+        await sub.cancel();
+      }
+      return false;
+    }
 
     // Timeout extendido a 12s para VidHide/CDNs lentos
     var ok = await completer.future.timeout(
@@ -1661,17 +2319,20 @@ class VideoPlayerController extends GetxController {
       onTimeout: () {
         // Al timeout, verificar si ExoPlayer ya está reproduciendo de facto
         if (isPlaying.value || exoPositionMs.value > 0 || exoIsPlaying.value) {
-          logger.info('_tryOpenExo: timeout pero hay reproducción activa -> OK');
+          logger
+              .info('_tryOpenExo: timeout pero hay reproducción activa -> OK');
           return true;
         }
-        // Verificar posición en el timer activo
-        logger.warning('_tryOpenExo: timeout de 12s sin confirmación de reproducción');
+        logger.warning(
+          '_tryOpenExo: timeout de 12s sin confirmación de reproducción',
+        );
         return false;
       },
     );
 
     // Verificación final: si exo ya avanzó en posición, es éxito
-    if (!ok && (isPlaying.value || exoPositionMs.value > 0 || exoIsPlaying.value)) {
+    if (!ok &&
+        (isPlaying.value || exoPositionMs.value > 0 || exoIsPlaying.value)) {
       logger.info('_tryOpenExo: marcado OK por estado actual post-timeout');
       ok = true;
     }
@@ -1689,6 +2350,16 @@ class VideoPlayerController extends GetxController {
     return ok;
   }
 
+  /// MIME explicito para playlists cuyo nombre no permite inferir HLS.
+  String? _exoMimeType(String url) {
+    final lower = url.toLowerCase();
+    if (lower.contains('.m3u8') || lower.contains('/hls/')) return null;
+    if (lower.contains('master.txt') || lower.contains('playlist.txt')) {
+      return 'application/x-mpegURL';
+    }
+    return null;
+  }
+
   // Abre el stream en el motor adecuado (ExoPlayer en Android, mpv en otras plataformas).
   Future<bool> _openStream(String url, Map<String, String>? headers) async {
     if (isExoPlayerActive) {
@@ -1697,6 +2368,25 @@ class VideoPlayerController extends GetxController {
       final hintHls = watchData?.type == ExtensionWatchBangumiType.hls;
       return await _tryOpenPlayer(url, headers, hintHls: hintHls);
     }
+  }
+
+  /// Detecta si la fuente viene de VidHide (por servidor o por host del CDN).
+  ///
+  /// Los dominios del CDN rotan, por eso se combinan la etiqueta del servidor
+  /// que devuelve la extension/extractor y los hosts conocidos.
+  bool _isVidHideSource(String url) {
+    if (currentServerName.value.toLowerCase().contains('vidhide')) {
+      return true;
+    }
+    final host = (Uri.tryParse(url)?.host ?? '').toLowerCase();
+    if (host.isEmpty) return false;
+    return host.contains('vidhide') ||
+        host.contains('morencius') ||
+        host.contains('minochinos') ||
+        host.contains('callistanise') ||
+        host.contains('vsharea') ||
+        host.contains('dramiyos-cdn') ||
+        host.contains('maplebrookdesignstudio');
   }
 
   /// Solo se intenta el proxy para fuentes HLS. Las fuentes directas (MP4,
@@ -1909,7 +2599,8 @@ class VideoPlayerController extends GetxController {
       await nativePlayer.setProperty('cache-secs', '60');
       // Forzar selección de calidad más baja inicialmente para arranque rápido
       await nativePlayer.setProperty('hls-bitrate', 'min');
-      logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] mpv props set');
+      logger.info(
+          '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] mpv props set');
     } catch (e) {
       logger.warning('No se pudieron configurar propiedades mpv: $e');
     }
@@ -1923,8 +2614,11 @@ class VideoPlayerController extends GetxController {
       try {
         await MediaProxyServer.instance.releaseSession(_proxySessionToken);
         _proxySessionToken = null;
-        final localPlaylist =
-            await MediaProxyServer.instance.open(url, cleanHeaders);
+        final localPlaylist = await MediaProxyServer.instance.open(
+          url,
+          cleanHeaders,
+          maxVideoHeight: _isVidHideSource(url) ? 720 : 0,
+        );
         if (localPlaylist != null) {
           playUrl = localPlaylist;
           proxied = true;
@@ -1947,16 +2641,20 @@ class VideoPlayerController extends GetxController {
       final pfMs = DateTime.now().difference(pf0).inMilliseconds;
       if (localPlaylist != null) {
         playUrl = localPlaylist;
-        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] HLS prefetch OK en ${pfMs}ms');
+        logger.info(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] HLS prefetch OK en ${pfMs}ms');
       } else {
-        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] HLS prefetch omitido en ${pfMs}ms');
+        logger.info(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] HLS prefetch omitido en ${pfMs}ms');
       }
     }
 
     try {
-      logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() START');
+      logger.info(
+          '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() START');
       await player.open(Media(playUrl, httpHeaders: cleanHeaders));
-      logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() RETURNED (stream abierto, esperando playback)');
+      logger.info(
+          '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] player.open() RETURNED (stream abierto, esperando playback)');
     } catch (e) {
       logger.severe('player.open error: $e');
       return false;
@@ -1971,25 +2669,29 @@ class VideoPlayerController extends GetxController {
     // Detección instantánea del primer frame decodificado (equivalente a onRenderedFirstFrame en ExoPlayer)
     subs.add(player.stream.width.listen((w) {
       if (w != null && w > 0) {
-        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] primer frame renderizado ($w px) -> OK');
+        logger.info(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] primer frame renderizado ($w px) -> OK');
         finish(true);
       }
     }));
     subs.add(player.stream.playing.listen((playing) {
       if (playing) {
-        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] playing=true -> OK');
+        logger.info(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] playing=true -> OK');
         finish(true);
       }
     }));
     subs.add(player.stream.duration.listen((d) {
       if (d > const Duration(seconds: 1)) {
-        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] duration=${d.inSeconds}s -> OK');
+        logger.info(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] duration=${d.inSeconds}s -> OK');
         finish(true);
       }
     }));
     subs.add(player.stream.position.listen((p) {
       if (p.inSeconds > 0) {
-        logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] position=${p.inSeconds}s -> OK');
+        logger.info(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] position=${p.inSeconds}s -> OK');
         finish(true);
       }
     }));
@@ -2000,28 +2702,35 @@ class VideoPlayerController extends GetxController {
           player.state.duration.inSeconds > 1 ||
           (player.state.width ?? 0) > 0;
       if (!alreadyPlaying) {
-        logger.severe('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] error sin reproducción activa: $errMsg');
+        logger.severe(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] error sin reproducción activa: $errMsg');
         finish(false);
       } else {
-        logger.warning('_tryOpenPlayer error ignorado (reproducción activa): $errMsg');
+        logger.warning(
+            '_tryOpenPlayer error ignorado (reproducción activa): $errMsg');
       }
     }));
 
-      var ok = await completer.future.timeout(
-        const Duration(seconds: 8),
-        onTimeout: () {
-          if (player.state.playing ||
-              player.state.position.inSeconds > 0 ||
-              (player.state.width ?? 0) > 0) {
-            logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] timeout pero reproducción activa -> OK');
-            return true;
-          }
-          logger.warning('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] TIMEOUT sin reproducción — FALLO');
-          return false;
-        },
-      );
+    var ok = await completer.future.timeout(
+      const Duration(seconds: 8),
+      onTimeout: () {
+        if (player.state.playing ||
+            player.state.position.inSeconds > 0 ||
+            (player.state.width ?? 0) > 0) {
+          logger.info(
+              '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] timeout pero reproducción activa -> OK');
+          return true;
+        }
+        logger.warning(
+            '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] TIMEOUT sin reproducción — FALLO');
+        return false;
+      },
+    );
 
-    if (!ok && (isPlaying.value || position.value.inSeconds > 0 || (player.state.width ?? 0) > 0)) {
+    if (!ok &&
+        (isPlaying.value ||
+            position.value.inSeconds > 0 ||
+            (player.state.width ?? 0) > 0)) {
       logger.info('_tryOpenPlayer: marcado OK por estado activo post-timeout');
       ok = true;
     }
@@ -2030,7 +2739,8 @@ class VideoPlayerController extends GetxController {
       await sub.cancel();
     }
 
-    logger.info('⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] _tryOpenPlayer END — ok=$ok');
+    logger.info(
+        '⏱ [player+${DateTime.now().difference(_tp0).inMilliseconds}ms] _tryOpenPlayer END — ok=$ok');
 
     if (ok) {
       error.value = '';
@@ -2102,4 +2812,23 @@ class Message {
   final Widget child;
   final Duration time;
   Message(this.child, {this.time = const Duration(seconds: 3)});
+}
+
+/// Copia inmutable de la resolucion de un episodio para reutilizarla.
+class _WatchCacheEntry {
+  _WatchCacheEntry({
+    required this.url,
+    required this.type,
+    required this.headers,
+    required this.subtitles,
+    required this.audioTrack,
+    required this.savedAt,
+  });
+
+  final String url;
+  final ExtensionWatchBangumiType type;
+  final Map<String, String>? headers;
+  final List<ExtensionBangumiWatchSubtitle>? subtitles;
+  final String? audioTrack;
+  final DateTime savedAt;
 }

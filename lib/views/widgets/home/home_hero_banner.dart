@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:jiruhub/controllers/home_controller.dart';
+import 'package:jiruhub/router/router.dart';
 import 'package:jiruhub/utils/yeflix_style.dart';
 import 'package:jiruhub/views/pages/detail_page.dart';
 import 'package:jiruhub/views/widgets/cache_network_image.dart';
@@ -67,12 +69,26 @@ class _HomeHeroBannerState extends State<HomeHeroBanner> {
   }
 
   void _openDetail(CatalogItem entry) {
-    Get.to(
-      DetailPage(
-        url: entry.item.url,
-        package: entry.package,
-        tag: 'hero_${entry.item.url}',
-      ),
+    // En escritorio la app navega con GoRouter: Get.to sin GetMaterialApp
+    // lanza "contextless navigation" y el clic no hace nada.
+    if (Platform.isAndroid) {
+      Get.to(
+        DetailPage(
+          url: entry.item.url,
+          package: entry.package,
+          tag: 'hero_${entry.item.url}',
+        ),
+      );
+      return;
+    }
+    router.push(
+      Uri(
+        path: '/detail',
+        queryParameters: {
+          "url": entry.item.url,
+          "package": entry.package,
+        },
+      ).toString(),
     );
   }
 

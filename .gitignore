@@ -58,3 +58,11 @@ Web/node_modules/
 
 # IDE
 .idea/
+
+# Android signing (no subir credenciales)
+android/key.properties
+android/app/keystore.jks
+android/app/*.jks
+
+# Artefactos de compilación (los publica el release, no van en el repo)
+/APKs/

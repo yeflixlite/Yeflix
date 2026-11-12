@@ -21,10 +21,10 @@ export default function DownloadButtons() {
       </Link>
       <Link
         to="/macos"
-        className="inline-flex w-full items-center justify-center gap-2.5 rounded-full border border-white/15 bg-white/[0.06] px-6 py-3.5 text-sm font-semibold text-white transition-colors hover:border-white/30 hover:bg-white/10 sm:w-auto"
+        className="inline-flex w-full items-center justify-center gap-2.5 rounded-full border border-white/10 bg-white/[0.03] px-6 py-3.5 text-sm font-semibold text-white/50 transition-colors hover:border-white/20 hover:text-white/70 sm:w-auto"
       >
         <Apple className="h-5 w-5" />
-        Descargar para macOS
+        macOS: próximamente
       </Link>
       <Link
         to="/linux"

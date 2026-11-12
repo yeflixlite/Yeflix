@@ -1,4 +1,5 @@
 import 'package:json_annotation/json_annotation.dart';
+import 'package:jiruhub/utils/html_entities.dart';
 
 part 'extension.g.dart';
 
@@ -137,8 +138,13 @@ class ExtensionEpisode {
   final String name;
   final String url;
 
-  factory ExtensionEpisode.fromJson(Map<String, dynamic> json) =>
-      _$ExtensionEpisodeFromJson(json);
+  factory ExtensionEpisode.fromJson(Map<String, dynamic> json) {
+    final episode = _$ExtensionEpisodeFromJson(json);
+    return ExtensionEpisode(
+      name: decodeHtmlEntities(episode.name),
+      url: episode.url,
+    );
+  }
 
   Map<String, dynamic> toJson() => _$ExtensionEpisodeToJson(this);
 }

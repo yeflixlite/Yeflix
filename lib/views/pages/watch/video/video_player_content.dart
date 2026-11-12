@@ -30,11 +30,6 @@ class VideoPlayerConten extends StatelessWidget {
         children: [
           ExoPlayerView(
             tag: tag,
-            sourceUrl: c.exoSourceUrl.value,
-            headers: c.exoHeaders.value,
-            onError: (message) => c.onExoError(message),
-            onStateChanged: (playing, state) => c.onExoStateChanged(playing, state),
-            onLoadingChanged: (loading) => c.onExoLoadingChanged(loading),
           ),
           Positioned.fill(
             child: VideoPlayerMobileControls(

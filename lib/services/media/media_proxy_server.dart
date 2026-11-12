@@ -79,8 +79,9 @@ class MediaProxyServer {
   /// URL original como fallback directo).
   Future<String?> open(
     String url,
-    Map<String, String>? headers,
-  ) async {
+    Map<String, String>? headers, {
+    int maxVideoHeight = 0,
+  }) async {
     if (!Platform.isWindows) return null;
     if (url.isEmpty || _isProxyUrl(url) || !url.startsWith('http')) return null;
     try {
@@ -92,7 +93,12 @@ class MediaProxyServer {
       if (!body.contains('#EXTM3U')) return null;
 
       final token = _newToken();
-      final session = _ProxySession(token, _cleanHeaders(headers), url);
+      final session = _ProxySession(
+        token,
+        _cleanHeaders(headers),
+        url,
+        maxVideoHeight: maxVideoHeight,
+      );
       _sessions[token] = session;
 
       // Prefetch del playlist de entrada: se sirve desde memoria en la
@@ -378,16 +384,43 @@ class MediaProxyServer {
       var cachedBytes = 0;
       var cacheable = cache && !wantsRange && cacheFile != null;
       try {
-        final upstream = await _dio.get<ResponseBody>(
-          target,
-          options: Options(
-            responseType: ResponseType.stream,
-            headers: requestHeaders,
-            followRedirects: true,
-            validateStatus: (status) => status != null && status < 500,
-          ),
-          cancelToken: cancel,
-        );
+        // Reintenta errores transitorios antes de responder 502. Un corte
+        // puntual del CDN no debe matar la reproduccion: mpv recibe el
+        // segmento en el segundo intento.
+        late Response<ResponseBody> upstream;
+        var attempt = 0;
+        while (true) {
+          try {
+            upstream = await _dio.get<ResponseBody>(
+              target,
+              options: Options(
+                responseType: ResponseType.stream,
+                headers: requestHeaders,
+                followRedirects: true,
+                validateStatus: (status) =>
+                    status != null &&
+                    status < 500 &&
+                    status != 408 &&
+                    status != 429,
+              ),
+              cancelToken: cancel,
+            );
+            break;
+          } on DioException catch (e) {
+            final status = e.response?.statusCode ?? 0;
+            final retryable =
+                e.type == DioExceptionType.connectionTimeout ||
+                    e.type == DioExceptionType.sendTimeout ||
+                    e.type == DioExceptionType.receiveTimeout ||
+                    e.type == DioExceptionType.connectionError ||
+                    status == 408 ||
+                    status == 429 ||
+                    status >= 500;
+            if (!retryable || attempt >= 2 || cancel.isCancelled) rethrow;
+            attempt++;
+            await Future.delayed(Duration(milliseconds: 400 * attempt));
+          }
+        }
         final status = upstream.statusCode ?? HttpStatus.ok;
         response.statusCode = status;
         _copyHeader(upstream, response, HttpHeaders.contentTypeHeader);
@@ -545,51 +578,91 @@ class MediaProxyServer {
     final isMaster = body.contains('#EXT-X-STREAM-INF') ||
         body.contains('#EXT-X-MEDIA:') ||
         body.contains('#EXT-X-I-FRAME-STREAM-INF');
-    final out = <String>[];
-    final lines = body.split('\n');
-    var expectVariantUri = false;
-    for (final raw in lines) {
-      final line = raw.trimRight();
-      final trimmed = line.trim();
-      if (trimmed.isEmpty) {
-        out.add(raw);
-        continue;
-      }
-      if (trimmed.startsWith('#')) {
-        final route = _tagRoute(trimmed);
-        if (route != null) {
-          out.add(line.replaceAllMapped(
-            RegExp(r'URI="([^"]+)"'),
-            (m) =>
-                'URI="${_proxyUri(baseUri, m.group(1)!, session, route)}"',
-          ));
-        } else {
-          out.add(raw);
+
+    String build(int limitHeight) {
+      final out = <String>[];
+      final lines = body.split('\n');
+      var expectVariantUri = false;
+      var skipVariantUri = false;
+      for (final raw in lines) {
+        final line = raw.trimRight();
+        final trimmed = line.trim();
+        if (trimmed.isEmpty) {
+          if (!skipVariantUri) out.add(raw);
+          continue;
         }
-        if (trimmed.startsWith('#EXT-X-STREAM-INF')) {
-          expectVariantUri = true;
+        if (trimmed.startsWith('#')) {
+          if (trimmed.startsWith('#EXT-X-STREAM-INF')) {
+            final height = _resolutionHeight(trimmed);
+            if (limitHeight > 0 && height != null && height > limitHeight) {
+              skipVariantUri = true;
+              expectVariantUri = true;
+              continue;
+            }
+            skipVariantUri = false;
+          }
+          if (trimmed.startsWith('#EXT-X-I-FRAME-STREAM-INF')) {
+            final height = _resolutionHeight(trimmed);
+            if (limitHeight > 0 && height != null && height > limitHeight) {
+              continue;
+            }
+          }
+          final route = _tagRoute(trimmed);
+          if (route != null) {
+            out.add(line.replaceAllMapped(
+              RegExp(r'URI="([^"]+)"'),
+              (m) =>
+                  'URI="${_proxyUri(baseUri, m.group(1)!, session, route)}"',
+            ));
+          } else {
+            out.add(raw);
+          }
+          if (trimmed.startsWith('#EXT-X-STREAM-INF')) {
+            expectVariantUri = true;
+          }
+          continue;
         }
-        continue;
+        if (skipVariantUri && expectVariantUri) {
+          skipVariantUri = false;
+          expectVariantUri = false;
+          continue;
+        }
+        out.add(_proxyUri(
+          baseUri,
+          trimmed,
+          session,
+          expectVariantUri ? 'entry' : 'p',
+        ));
+        expectVariantUri = false;
       }
-      out.add(_proxyUri(
-        baseUri,
-        trimmed,
-        session,
-        expectVariantUri ? 'entry' : 'p',
-      ));
-      expectVariantUri = false;
+      return out.join('\n');
+    }
+
+    var rewritten = build(session.maxVideoHeight);
+    // Seguridad: si el filtro dejo el master sin variantes, se sirve el
+    // original para no romper la reproduccion.
+    if (session.maxVideoHeight > 0 &&
+        body.contains('#EXT-X-STREAM-INF') &&
+        !rewritten.contains('#EXT-X-STREAM-INF')) {
+      rewritten = build(0);
     }
 
     if (!isMaster) {
       final hasEnd = body.contains('#EXT-X-ENDLIST');
       if (!hasEnd && _isVodPlaylist(body, responseHeaders, session, sourceUrl)) {
-        out.add('#EXT-X-ENDLIST');
+        rewritten = '$rewritten\n#EXT-X-ENDLIST';
         logger.info(
           'MediaProxy: VOD sin ENDLIST detectado en ${_safeUrl(sourceUrl)}',
         );
       }
     }
-    return out.join('\n');
+    return rewritten;
+  }
+
+  static int? _resolutionHeight(String line) {
+    final match = RegExp(r'RESOLUTION=(\d+)x(\d+)').firstMatch(line);
+    if (match == null) return null;
+    return int.tryParse(match.group(2)!);
   }
 
   /// Decide si un playlist sin `#EXT-X-ENDLIST` es en realidad VOD.
@@ -878,10 +951,18 @@ class MediaProxyServer {
 }
 
 class _ProxySession {
-  _ProxySession(this.token, this.headers, this.origin);
+  _ProxySession(
+    this.token,
+    this.headers,
+    this.origin, {
+    this.maxVideoHeight = 0,
+  });
   final String token;
   final Map<String, String> headers;
   final String origin;
+
+  /// Limite de altura para las variantes del master (0 = sin limite).
+  final int maxVideoHeight;
   final Set<CancelToken> cancels = {};
   final Set<String> vodUrls = {};
   final Set<String> liveUrls = {};

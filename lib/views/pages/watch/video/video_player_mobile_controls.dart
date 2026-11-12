@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:jiruhub/utils/layout.dart';
 import 'package:jiruhub/utils/router.dart';
 import 'package:jiruhub/views/pages/watch/video/video_player_cast.dart';
 import 'package:jiruhub/views/pages/watch/video/video_player_sidebar.dart';
+import 'package:jiruhub/views/pages/watch/video/video_player_subtitle_overlay.dart';
 import 'package:jiruhub/views/widgets/yeflix_loader.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
@@ -141,6 +143,11 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                       _c.subtitleBackgroundOpacity.value,
                     ),
                   );
+                  if (Platform.isAndroid) {
+                    // ExoPlayer no conoce las pistas externas de media_kit:
+                    // el subtítulo se dibuja en Flutter y no toca el motor.
+                    return VideoPlayerSubtitleOverlay(controller: _c);
+                  }
                   return SubtitleView(
                     controller: _c.videoController,
                     configuration: SubtitleViewConfiguration(
@@ -443,10 +450,11 @@ class _VideoPlayerMobileControlsState extends State<VideoPlayerMobileControls> {
                   if (!_c.showSidebar.value) {
                     return const SizedBox.shrink();
                   }
+                  // Sin velo oscuro: el video debe seguir viéndose y
+                  // reproduciéndose con el menú abierto. Solo captura el toque
+                  // fuera del panel para cerrarlo.
                   return GestureDetector(
-                    child: Container(
-                      color: Colors.black54,
-                    ),
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       _c.showSidebar.value = false;
                     },

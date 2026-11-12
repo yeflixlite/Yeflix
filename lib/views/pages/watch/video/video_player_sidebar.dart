@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:fluent_ui/fluent_ui.dart' as fluent;
 import 'package:get/get.dart';
@@ -850,6 +852,11 @@ class _TrackSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final active = Platform.isAndroid
+        ? controller.androidSubtitle.value
+        : controller.player.state.track.subtitle;
+    final subtitlesOff =
+        Platform.isAndroid ? active == null : SubtitleTrack.no() == active;
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 10),
       children: [
@@ -857,8 +864,7 @@ class _TrackSelector extends StatelessWidget {
           title: 'video.subtitle'.i18n,
         ),
         ListTile(
-          selected:
-              SubtitleTrack.no() == controller.player.state.track.subtitle,
+          selected: subtitlesOff,
           title: Text('common.off'.i18n),
           onTap: () {
             controller.setSubtitleTrack(
@@ -877,7 +883,7 @@ class _TrackSelector extends StatelessWidget {
         // 来自扩展的字幕
         for (final subtitle in controller.subtitles)
           ListTile(
-            selected: subtitle == controller.player.state.track.subtitle,
+            selected: subtitle == active,
             title: Text(subtitle.title ?? ''),
             subtitle: Text(subtitle.language ?? ''),
             onTap: () {
@@ -892,7 +898,7 @@ class _TrackSelector extends StatelessWidget {
           if (subtitle != SubtitleTrack.no() &&
               (subtitle.language != null || subtitle.title != null))
             ListTile(
-              selected: subtitle == controller.player.state.track.subtitle,
+              selected: subtitle == active,
               title: Text(subtitle.title ?? ''),
               subtitle: Text(subtitle.language ?? ''),
               onTap: () {

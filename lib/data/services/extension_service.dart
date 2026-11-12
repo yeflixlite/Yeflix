@@ -18,6 +18,7 @@ import 'package:flutter_js/flutter_js.dart';
 import 'package:jiruhub/models/index.dart';
 import 'package:jiruhub/data/services/database_service.dart';
 import 'package:jiruhub/utils/extension.dart';
+import 'package:jiruhub/utils/javascriptcore_linux.dart';
 import 'package:flutter_js/javascriptcore/jscore_runtime.dart';
 
 class ExtensionService {
@@ -49,6 +50,9 @@ class ExtensionService {
     } else if (Platform.isWindows) {
       runtime = QuickJsRuntime2(stackSize: 1024 * 1024);
     } else if (Platform.isLinux) {
+      // En Mint 22 / Ubuntu 24.04 solo existe JavaScriptCore 4.1; el loader
+      // apunta flutter_js a la versión disponible antes de crear el runtime.
+      JavascriptCoreLoader.ensureInitialized();
       runtime = JavascriptCoreRuntime();
     } else {
       runtime = JavascriptCoreRuntime();
@@ -443,12 +447,27 @@ class Extension {
   }
   async load() {}
 }
+const __miruQueues = {};
 async function handlePromise(channelName,message){
-  const waitForChange  = new Promise(resolve=>{DartBridge.setHandler(channelName, async (arg) => {
-    resolve(arg);
-  })});
-  DartBridge.sendMessage(channelName,  message);
-  return await waitForChange
+  // Las peticiones concurrentes al mismo canal comparten un unico handler en
+  // DartBridge: la segunda sobrescribe a la primera y su promesa nunca se
+  // resuelve (p.ej. Pelis Premium hace Promise.all de /peliculas y /series).
+  // Se serializan por canal para que cada respuesta llegue a su promesa.
+  const previous = __miruQueues[channelName] || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  __miruQueues[channelName] = previous.then(() => current);
+  await previous;
+  try {
+    return await new Promise((resolve) => {
+      DartBridge.setHandler(channelName, async (arg) => {
+        resolve(arg);
+      });
+      DartBridge.sendMessage(channelName, message).catch(() => {});
+    });
+  } finally {
+    release();
+  }
 }
 async function stringify(callback) {
   const data = await callback();
