@@ -29,7 +29,7 @@ Aplicación moderna, rápida y fluida para Android y escritorio, diseñada para 
 * **Gestos y controles avanzados**: ajuste de brillo, volumen, selector de pistas de audio, cambio dinámico de servidores y pantalla completa inmersiva.
 
 ### ⚡ Carga Ultrarrápida de Servidores
-* Tiempos de inicio de video reducidos de más de 15 segundos a **1 - 3 segundos** con resolución directa de stream.
+* Tiempos de inicio de video reducidos de más de 15 segundos a **5 - 10 segundos** con resolución directa de stream.
 * Servidores compatibles optimizados: **StreamWish**, **VidHide**, **Voe**, **Filelions**, entre otros.
 * Conmutación inteligente de servidores: si una fuente falla o expira, cambia automáticamente a la siguiente opción funcional sin interrupciones.
 
